@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>随口说</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <!-- 侧边栏 -->
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <img class="app-logo" src="logo.png" alt="随口说">
+      <div class="app-name">随口说</div>
+    </div>
+    <div class="nav-items">
+      <div class="nav-item active" data-page="home">
+        <span class="nav-icon">⌂</span>
+        <span>主页</span>
+      </div>
+      <div class="nav-item" data-page="skills">
+        <span class="nav-icon">⚡</span>
+        <span>技能</span>
+      </div>
+      <div class="nav-item" data-page="model">
+        <span class="nav-icon">◎</span>
+        <span>模型</span>
+      </div>
+      <div class="nav-item" data-page="settings">
+        <span class="nav-icon">⚙</span>
+        <span>设置</span>
+      </div>
+    </div>
+    <div class="sidebar-footer">
+      <div class="version">v1.0.0</div>
+    </div>
+  </nav>
+
+  <!-- 内容区 -->
+  <main class="content">
+    <!-- 主页 -->
+    <section class="page active" id="page-home">
+      <div class="page-header">
+        <h1>主页</h1>
+      </div>
+      <div class="home-content">
+        <!-- 时间节省展示 -->
+        <div class="time-saved-hero">
+          <div class="time-saved-label">已帮你节省</div>
+          <div class="time-saved-value" id="timeSavedValue">0 分钟</div>
+          <div class="time-saved-detail">
+            相当于少打 <span id="timeSavedChars">0</span> 个字，语音输入效率提升 <span>3 倍</span>
+          </div>
+        </div>
+
+        <div class="status-card">
+          <div class="status-indicator" id="statusDot"></div>
+          <div class="status-info">
+            <div class="status-text" id="statusText">就绪</div>
+            <div class="status-hint">短按右 Command 键开始语音输入</div>
+          </div>
+        </div>
+
+        <div class="stats-row">
+          <div class="stat-card">
+            <div class="stat-value" id="statTotal">0</div>
+            <div class="stat-label">总识别次数</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="statToday">0</div>
+            <div class="stat-label">今日识别</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="statChars">0</div>
+            <div class="stat-label">总字符数</div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <h2>最近识别</h2>
+            <button class="btn-text" onclick="clearHistory()">清除</button>
+          </div>
+          <div class="history-list" id="historyList">
+            <div class="empty-state">暂无识别记录</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 技能 -->
+    <section class="page" id="page-skills">
+      <div class="page-header">
+        <div class="page-header-row">
+          <h1>技能</h1>
+          <div class="page-header-actions">
+            <span class="auto-run-label">自动运行</span>
+            <label class="toggle">
+              <input type="checkbox" id="skillsAutoRun" onchange="onSkillChanged()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="skills-hint" id="skillsHint">
+        语音输入后，不调用大模型处理，也不执行任何技能
+      </div>
+
+      <div class="skills-list">
+        <div class="skill-card">
+          <div class="skill-header">
+            <div class="skill-info">
+              <div class="skill-name">个性化偏好</div>
+              <div class="skill-desc">告诉随口说你的表达习惯和偏好，获得更准确的识别结果</div>
+              <div class="skill-badge">随口说</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="skillPersonalize" onchange="onSkillChanged()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="skill-body" id="personalizeBody">
+            <textarea id="personalizeText" placeholder="例如：我是程序员，经常使用技术术语。请保留英文专有名词不要翻译。" onchange="onSkillChanged()"></textarea>
+          </div>
+        </div>
+
+        <div class="skill-card">
+          <div class="skill-header">
+            <div class="skill-info">
+              <div class="skill-name">加载用户词典</div>
+              <div class="skill-desc">使用你定义的个人词库，提升语音识别的术语准确率</div>
+              <div class="skill-badge">随口说</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="skillUserDict" onchange="onSkillChanged()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="skill-body" id="userDictBody">
+            <textarea id="userDictText" placeholder="每行一个词条，例如：&#10;PyObjC&#10;WebSocket&#10;火山引擎" onchange="onSkillChanged()"></textarea>
+          </div>
+        </div>
+
+        <div class="skill-card">
+          <div class="skill-header">
+            <div class="skill-info">
+              <div class="skill-name">自动结构化</div>
+              <div class="skill-desc">自动将口述的长文本整理成干净、结构化的文本，包含换行、空行、步骤和要点等结构，提升长文本的可读性。</div>
+              <div class="skill-badge">随口说</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="skillAutoStructure" onchange="onSkillChanged()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="skill-card">
+          <div class="skill-header">
+            <div class="skill-info">
+              <div class="skill-name">口语过滤</div>
+              <div class="skill-desc">自动去除像"呃"、"嗯"和"你知道的"等填充词，自动检测并去除讲话中不必要和重复的词汇，适合专业严肃场景的对话。</div>
+              <div class="skill-badge">随口说</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="skillOralFilter" onchange="onSkillChanged()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="skill-card">
+          <div class="skill-header">
+            <div class="skill-info">
+              <div class="skill-name">去除结尾句号</div>
+              <div class="skill-desc">自动去除转写结果结尾的句号（。和 .），适合在聊天输入框中使用。</div>
+              <div class="skill-badge">随口说</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="skillRemovePunct" onchange="onSkillChanged()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="custom-skills-list" id="customSkillsList"></div>
+
+        <button class="btn-add-skill" onclick="addCustomSkill()">
+          <span class="btn-add-icon">+</span>
+          <span>添加自定义技能</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- 模型 -->
+    <section class="page" id="page-model">
+      <div class="page-header">
+        <h1>模型</h1>
+      </div>
+
+      <!-- 默认模型 -->
+      <div class="default-model-section">
+        <div class="default-model-header">
+          <span class="default-model-icon">⚙</span>
+          <span class="default-model-title">默认模型</span>
+        </div>
+        <div class="default-model-selectors">
+          <div class="model-selector">
+            <div class="model-selector-label">语音识别模型</div>
+            <select id="defaultAsrProvider" onchange="onDefaultProviderChange()">
+              <option value="volcengine">火山引擎</option>
+            </select>
+            <div class="model-selector-hint">负责语音转文字，准确听懂你说的每一句话</div>
+          </div>
+          <div class="model-selector">
+            <div class="model-selector-label">大模型（技能处理）</div>
+            <select id="defaultLlmProvider" onchange="onDefaultProviderChange()">
+              <option value="">未配置</option>
+            </select>
+            <div class="model-selector-hint">技能启用后，用大模型优化、结构化文本</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 语音识别服务商 -->
+      <div class="section">
+        <h2>语音识别服务商</h2>
+        <div class="provider-grid" id="asrProviderGrid"></div>
+      </div>
+
+      <!-- 大模型服务商 -->
+      <div class="section">
+        <h2>大模型服务商</h2>
+        <div class="provider-grid" id="llmProviderGrid"></div>
+      </div>
+    </section>
+
+    <!-- 设置 -->
+    <section class="page" id="page-settings">
+      <div class="page-header">
+        <h1>设置</h1>
+      </div>
+      <div class="settings-content">
+        <div class="section">
+          <h2>快捷键</h2>
+          <div class="form-group">
+            <label>语音输入触发键</label>
+            <div class="hotkey-display" id="hotkeyDisplay" onclick="startRecordHotkey()">
+              <span id="hotkeyText">右 Command</span>
+              <span class="hotkey-hint">点击修改</span>
+            </div>
+          </div>
+          <div class="setting-note">
+            短按触发键 → 开始/停止语音输入
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>通用</h2>
+          <div class="form-group toggle-row">
+            <label>开机自启动</label>
+            <label class="toggle">
+              <input type="checkbox" id="autoStart" onchange="saveGeneralSettings()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="form-group toggle-row">
+            <label>识别完成后自动粘贴</label>
+            <label class="toggle">
+              <input type="checkbox" id="autoPaste" checked onchange="saveGeneralSettings()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="form-group toggle-row">
+            <label>显示录音浮窗</label>
+            <label class="toggle">
+              <input type="checkbox" id="showFloatWindow" checked onchange="saveGeneralSettings()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>关于</h2>
+          <div class="about-info">
+            <div class="about-row"><span>应用名称</span><span>随口说</span></div>
+            <div class="about-row"><span>版本</span><span>1.0.0</span></div>
+            <div class="about-row"><span>语音引擎</span><span>火山引擎 V3</span></div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </main>
+</div>
+<!-- 服务商配置弹窗 -->
+<div class="modal-overlay" id="providerModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title-row">
+        <div class="modal-provider-icon" id="modalIcon"></div>
+        <div>
+          <div class="modal-provider-name" id="modalName"></div>
+          <div class="modal-provider-category" id="modalCategory"></div>
+        </div>
+      </div>
+      <button class="modal-close" onclick="closeProviderModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-footer">
+      <div class="form-status" id="modalStatus"></div>
+      <div class="form-actions">
+        <span id="modalTestBtn"></span>
+        <button class="btn btn-primary" onclick="saveModalProvider()">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- 全屏新用户引导 -->
+<div class="onboarding-overlay" id="onboardingOverlay">
+  <div class="onboarding-container">
+    <div class="onboarding-progress">
+      <div class="ob-progress-bar"><div class="ob-progress-fill" id="obProgressFill"></div></div>
+      <button class="ob-skip" onclick="finishOnboarding()">跳过</button>
+    </div>
+
+    <div class="onboarding-slides" id="obSlides">
+      <!-- Step 0: Welcome -->
+      <div class="ob-slide active" data-step="0">
+        <div class="ob-slide-visual">
+          <div class="ob-hero-icon">
+            <img src="logo.png" alt="随口说" class="ob-logo">
+          </div>
+          <div class="ob-particles">
+            <div class="ob-particle"></div><div class="ob-particle"></div>
+            <div class="ob-particle"></div><div class="ob-particle"></div>
+            <div class="ob-particle"></div><div class="ob-particle"></div>
+          </div>
+        </div>
+        <div class="ob-slide-content">
+          <h1 class="ob-title">随口说</h1>
+          <p class="ob-subtitle">你的 macOS 智能语音输入助手</p>
+          <p class="ob-desc">在任何输入框中，按下快捷键即可语音输入。<br>AI 技能自动优化你的每一句话。</p>
+          <button class="ob-btn-primary" onclick="obNext()">开始设置</button>
+        </div>
+      </div>
+
+      <!-- Step 1: Permissions -->
+      <div class="ob-slide" data-step="1">
+        <div class="ob-slide-visual">
+          <div class="ob-icon-group">
+            <div class="ob-perm-card">
+              <div class="ob-perm-icon">🎤</div>
+              <div class="ob-perm-name">麦克风</div>
+              <div class="ob-perm-desc">录制语音</div>
+            </div>
+            <div class="ob-perm-card">
+              <div class="ob-perm-icon">🖐</div>
+              <div class="ob-perm-name">辅助功能</div>
+              <div class="ob-perm-desc">自动粘贴</div>
+            </div>
+            <div class="ob-perm-card">
+              <div class="ob-perm-icon">⌨</div>
+              <div class="ob-perm-name">输入监控</div>
+              <div class="ob-perm-desc">全局快捷键</div>
+            </div>
+          </div>
+        </div>
+        <div class="ob-slide-content">
+          <h1 class="ob-title">授予系统权限</h1>
+          <p class="ob-desc">随口说需要以下 3 个权限才能正常工作。<br>请前往 <strong>系统设置 → 隐私与安全性</strong>，逐一开启。</p>
+          <div class="ob-actions">
+            <button class="ob-btn-secondary" onclick="pyCall('open_privacy_settings',{})">打开系统设置</button>
+            <button class="ob-btn-primary" onclick="obNext()">已完成，下一步</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: API Configuration -->
+      <div class="ob-slide" data-step="2">
+        <div class="ob-slide-visual">
+          <div class="ob-model-cards" id="obModelCards"></div>
+        </div>
+        <div class="ob-slide-content">
+          <h1 class="ob-title">语音识别模型</h1>
+          <p class="ob-desc">已为你内置<strong>随口说语音识别模型</strong>，开箱即用。<br>你也可以在「模型」页面切换为其他服务商。</p>
+          <div class="ob-actions">
+            <button class="ob-btn-primary" onclick="obNext()">下一步</button>
+            <button class="ob-btn-text" onclick="finishOnboarding();navigateTo('model')">查看更多模型</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Hotkey Test -->
+      <div class="ob-slide" data-step="3">
+        <div class="ob-slide-visual">
+          <div class="ob-keyboard-test">
+            <div class="ob-keyboard">
+              <div class="ob-kb-row">
+                <div class="ob-key w15">Tab</div>
+                <div class="ob-key">Q</div><div class="ob-key">W</div><div class="ob-key">E</div>
+                <div class="ob-key">R</div><div class="ob-key">T</div><div class="ob-key">Y</div>
+                <div class="ob-key">U</div><div class="ob-key">I</div><div class="ob-key">O</div>
+                <div class="ob-key">P</div>
+              </div>
+              <div class="ob-kb-row">
+                <div class="ob-key w17">Caps</div>
+                <div class="ob-key">A</div><div class="ob-key">S</div><div class="ob-key">D</div>
+                <div class="ob-key">F</div><div class="ob-key">G</div><div class="ob-key">H</div>
+                <div class="ob-key">J</div><div class="ob-key">K</div><div class="ob-key">L</div>
+                <div class="ob-key w15">Return</div>
+              </div>
+              <div class="ob-kb-row">
+                <div class="ob-key w20">Shift</div>
+                <div class="ob-key">Z</div><div class="ob-key">X</div><div class="ob-key">C</div>
+                <div class="ob-key">V</div><div class="ob-key">B</div><div class="ob-key">N</div>
+                <div class="ob-key">M</div>
+                <div class="ob-key w20">Shift</div>
+              </div>
+              <div class="ob-kb-row">
+                <div class="ob-key w12" data-k="fn">fn</div>
+                <div class="ob-key w12" data-k="ctrl">⌃</div>
+                <div class="ob-key w12" data-k="opt-l">⌥</div>
+                <div class="ob-key w15 ob-key-target" data-k="cmd-l" id="obKeyL">⌘</div>
+                <div class="ob-key ob-key-space">空格</div>
+                <div class="ob-key w15 ob-key-target" data-k="cmd-r" id="obKeyR">⌘</div>
+                <div class="ob-key w12" data-k="opt-r">⌥</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="ob-slide-content">
+          <h1 class="ob-title">按下以测试快捷键</h1>
+          <p class="ob-desc">
+            我们推荐使用 <span class="ob-key-inline" id="obTestKeyName">右 Command</span> 键，位于键盘右下角。
+          </p>
+          <p class="ob-test-prompt" id="obTestPrompt">按下时，你会看到按键高亮变蓝</p>
+          <div class="ob-actions">
+            <button class="ob-btn-secondary" onclick="obChangeHotkey()">不，换个快捷键</button>
+            <button class="ob-btn-primary" id="obTestNextBtn" onclick="obNext()">下一步</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4: Quick Demo -->
+      <div class="ob-slide" data-step="4">
+        <div class="ob-slide-visual">
+          <div class="ob-demo-visual">
+            <div class="ob-kbd-hint">
+              <div class="ob-kbd" id="obKbd">⌘ R</div>
+              <div class="ob-kbd-label">短按</div>
+            </div>
+            <div class="ob-demo-arrow">→</div>
+            <div class="ob-demo-flow">
+              <div class="ob-flow-item">
+                <div class="ob-flow-dot ob-dot-rec"></div>
+                <span>录音</span>
+              </div>
+              <div class="ob-flow-item">
+                <div class="ob-flow-dot ob-dot-ai"></div>
+                <span>AI 处理</span>
+              </div>
+              <div class="ob-flow-item">
+                <div class="ob-flow-dot ob-dot-paste"></div>
+                <span>自动粘贴</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="ob-slide-content">
+          <h1 class="ob-title">开始说话</h1>
+          <p class="ob-desc">将光标放在任意输入框中，<strong>短按 <span id="obHotkey">右 Command</span></strong> 键开始录音，再按一次结束。<br><strong>长按</strong>则进入语音助手模式，松开执行指令。</p>
+          <button class="ob-btn-primary ob-btn-done" onclick="finishOnboarding()">开始使用</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="ob-dots" id="obDots">
+      <span class="ob-dot active" onclick="obGoTo(0)"></span>
+      <span class="ob-dot" onclick="obGoTo(1)"></span>
+      <span class="ob-dot" onclick="obGoTo(2)"></span>
+      <span class="ob-dot" onclick="obGoTo(3)"></span>
+      <span class="ob-dot" onclick="obGoTo(4)"></span>
+    </div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
