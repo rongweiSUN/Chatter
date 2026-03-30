@@ -1,0 +1,33 @@
+---
+description: Git 分支策略与提交规范
+alwaysApply: true
+---
+
+# Git 工作流规则
+
+## 分支类型
+
+| 分支 | 命名 | 用途 | 生命周期 |
+|------|------|------|---------|
+| `main` | 固定 | 稳定版本，随时可打包发布 | 永久 |
+| `feature/*` | `feature/功能描述` | 新功能开发或大改造 | 合并后删除 |
+| `fix/*` | `fix/问题描述` | 修复 bug | 合并后删除 |
+
+## 工作流程
+
+1. 从 `main` 创建功能分支：`git checkout -b feature/xxx`
+2. 在功能分支上频繁提交，每个提交聚焦一个改动
+3. 开发完成后合并回 `main`：`git checkout main && git merge feature/xxx`
+4. 推送并删除已合并的分支：`git push && git branch -d feature/xxx`
+
+## 提交信息规范
+
+- 用中文或英文清楚描述"做了什么"，如：`替换托盘模块为 QSystemTrayIcon`
+- 禁止无意义信息：`update`、`fix`、`修改了 main.py`
+- 格式：`<类型>: <描述>`，类型包括 `feat`、`fix`、`refactor`、`docs`、`chore`
+
+## 保护规则
+
+- 禁止在 `main` 上直接开发，所有改动必须通过分支合并
+- 禁止对 `main` 执行 `git push --force`
+- 合并前确保代码可正常运行

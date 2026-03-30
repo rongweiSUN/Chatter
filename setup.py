@@ -18,7 +18,6 @@ APP = ["main.py"]
 DATA_FILES = [("web", ["web/index.html", "web/styles.css", "web/app.js", "web/logo.png"])]
 OPTIONS = {
     "argv_emulation": False,
-    "iconfile": "app_icon.icns",
     "plist": {
         "CFBundleName": "随口说",
         "CFBundleDisplayName": "随口说",
@@ -57,8 +56,11 @@ OPTIONS = {
         "skill_engine",
         "voice_agent",
         "confirm_dialog",
+        "answer_window",
     ],
 }
+if os.path.exists(os.path.join(os.path.dirname(__file__), "app_icon.icns")):
+    OPTIONS["iconfile"] = "app_icon.icns"
 
 setup(
     app=APP,

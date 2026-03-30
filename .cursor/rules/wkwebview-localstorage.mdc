@@ -1,0 +1,22 @@
+---
+description: WKWebView localStorage 缓存陷阱与引导重置方法
+globs: "**/app_window.py,**/app.js"
+alwaysApply: false
+---
+
+# WKWebView localStorage 缓存行为
+
+## 关键事实
+
+- WKWebView 的 localStorage 存储在 `~/Library/WebKit/com.xiu.voiceinput/WebsiteData/Default/.../LocalStorage/localstorage.sqlite3`
+- **直接删除 sqlite 文件无法清除 localStorage**：WKWebView 的 `WKWebsiteDataStore` 有内存级缓存，即使删掉磁盘文件，运行中或下次启动时仍会返回旧值
+- 正确清除方式是通过 `WKWebsiteDataStore` API（`removeDataOfTypes:modifiedSince:completionHandler:`）
+
+## 开发测试中重置引导
+
+引导完成标记存储在 localStorage 的 `ob_done_v3` key 中。如果需要重新触发引导：
+
+1. **改 key 版本号**：修改 `app.js` 中 `OB_STORAGE_KEY` 的值（如 `ob_done_v4`），旧标记自动失效
+2. **通过 API 清除**（更正规）：在 `app_window.py` 的 `_build` 方法中调用 `WKWebsiteDataStore.defaultDataStore().removeDataOfTypes_modifiedSince_completionHandler_(...)`
+
+**不要用 `rm -rf` 删 sqlite 文件来重置**，这不可靠。

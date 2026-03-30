@@ -62,9 +62,16 @@ class Settings:
 
     skills: SkillsConfig = field(default_factory=SkillsConfig)
 
-    providers: dict = field(default_factory=dict)
+    providers: dict = field(default_factory=lambda: {
+        "volcengine_llm": {
+            "api_key": "55b14cca-fe66-411d-9709-cffd88227df7",
+            "api_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "model": "doubao-seed-2-0-lite-260215",
+            "_configured": True,
+        },
+    })
     default_asr: str = "builtin_asr"
-    default_llm: str = ""
+    default_llm: str = "volcengine_llm"
 
     def to_dict(self) -> dict:
         return asdict(self)

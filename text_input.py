@@ -7,6 +7,11 @@ from __future__ import annotations
 - Quartz.CGEvent 模拟键盘事件
 """
 
+import ctypes
+import ctypes.util
+import platform
+import subprocess
+import sys
 import time
 
 from AppKit import NSPasteboard, NSPasteboardTypeString
@@ -17,11 +22,51 @@ from Quartz import (
     kCGEventFlagMaskCommand,
     kCGHIDEventTap,
 )
-import ctypes, ctypes.util
-_as_lib = ctypes.cdll.LoadLibrary(ctypes.util.find_library("ApplicationServices"))
-_as_lib.AXIsProcessTrusted.restype = ctypes.c_bool
+
+# AXIsProcessTrusted：直接从 HIServices 加载；返回值类型为 MacTypes.Boolean（unsigned char）。
+_HISERVICES = (
+    "/System/Library/Frameworks/ApplicationServices.framework/"
+    "Versions/Current/Frameworks/HIServices.framework/HIServices"
+)
+try:
+    _as_lib = ctypes.cdll.LoadLibrary(_HISERVICES)
+except OSError:
+    _as_lib = ctypes.cdll.LoadLibrary(ctypes.util.find_library("ApplicationServices"))
+_as_lib.AXIsProcessTrusted.restype = ctypes.c_uint8
+_as_lib.AXIsProcessTrusted.argtypes = []
+
+
 def _ax_trusted() -> bool:
-    return _as_lib.AXIsProcessTrusted()
+    return bool(_as_lib.AXIsProcessTrusted())
+
+
+def _ax_trusted_with_retry() -> bool:
+    """首帧偶发未就绪时重试一次，减轻启动瞬间误判。"""
+    if _ax_trusted():
+        return True
+    time.sleep(0.2)
+    return _ax_trusted()
+
+
+def accessibility_denied_user_hint() -> str:
+    """用户已在设置里打开开关仍失败时的说明（TCC 绑定的是当前二进制路径）。"""
+    try:
+        from AppKit import NSBundle
+
+        b = NSBundle.mainBundle()
+        bp = b.bundlePath() if b else None
+    except Exception:
+        bp = None
+    parts = [
+        "若此处已开启但仍无法粘贴：请到「隐私与安全性 → 辅助功能」中移除「随口说」"
+        "或列表中的 Python，再点「+」添加当前正在运行的程序；更新、重装或换过"
+        "venv 后，开关可能仍显示为开，但未对应实际进程。",
+        f"需授权的主程序路径：{sys.executable}",
+    ]
+    # 仅在实际以 .app 运行时展示包路径（命令行 python 时 mainBundle 可能指向系统工具链）
+    if bp and str(bp).endswith(".app"):
+        parts.append(f"应用包路径：{bp}")
+    return "\n".join(parts)
 
 _KEY_V = 9
 _KEY_C = 8
@@ -78,20 +123,29 @@ def get_selected_text() -> str | None:
     如果没有选中内容或无辅助功能权限，返回 None。
     会自动恢复原有剪贴板内容。
     """
-    if not _ax_trusted():
+    if not _ax_trusted_with_retry():
+        print("[输入] get_selected_text: 无辅助功能权限", flush=True)
         return None
 
     old = _get_clipboard()
+    old_count = NSPasteboard.generalPasteboard().changeCount()
 
     pb = NSPasteboard.generalPasteboard()
     pb.clearContents()
 
     if not _simulate_cmd_c():
+        print("[输入] get_selected_text: simulate_cmd_c 失败", flush=True)
         if old is not None:
             _set_clipboard(old)
         return None
 
-    time.sleep(0.15)
+    # 轮询等待剪贴板 changeCount 变化（目标应用写入），最多 0.5 秒
+    deadline = time.monotonic() + 0.5
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
+        if NSPasteboard.generalPasteboard().changeCount() != old_count:
+            break
+
     selected = _get_clipboard()
 
     if old is not None:
@@ -100,25 +154,52 @@ def get_selected_text() -> str | None:
         pb.clearContents()
 
     if selected and selected.strip():
-        print(f"[输入] 检测到选中文字: {selected.strip()[:50]}")
+        print(f"[输入] 检测到选中文字: {selected.strip()[:50]}", flush=True)
         return selected.strip()
+    print("[输入] get_selected_text: 剪贴板无选中内容", flush=True)
     return None
 
 
 def request_accessibility():
-    """主动触发 macOS 辅助功能权限请求弹窗，并打开系统设置页面。"""
+    """打开「辅助功能」设置页（兼容 System Settings / 旧版 System Preferences）。"""
     try:
-        import subprocess
-        subprocess.Popen([
-            "osascript", "-e",
-            'tell application "System Preferences" to reveal anchor '
-            '"Privacy_Accessibility" of pane id '
-            '"com.apple.preference.security"',
-        ])
-        subprocess.Popen([
-            "osascript", "-e",
-            'tell application "System Preferences" to activate',
-        ])
+
+        def _open_url(url: str) -> bool:
+            try:
+                return subprocess.call(["open", url], timeout=8) == 0
+            except (OSError, subprocess.SubprocessError):
+                return False
+
+        if _open_url(
+            "x-apple.systempreferences:com.apple.preference.security?"
+            "Privacy_Accessibility"
+        ):
+            return
+
+        ver = platform.mac_ver()[0]
+        mac_major = 12
+        if ver:
+            try:
+                mac_major = int(ver.split(".")[0])
+            except ValueError:
+                pass
+
+        if mac_major >= 13:
+            script = (
+                'tell application "System Settings" to reveal anchor '
+                '"Privacy_Accessibility" of pane id '
+                '"com.apple.settings.PrivacySecurity.extension"\n'
+                'tell application "System Settings" to activate'
+            )
+        else:
+            script = (
+                'tell application "System Preferences" to reveal anchor '
+                '"Privacy_Accessibility" of pane id '
+                '"com.apple.preference.security"\n'
+                'tell application "System Preferences" to activate'
+            )
+
+        subprocess.Popen(["osascript", "-e", script])
     except Exception as e:
         print(f"[输入] 打开辅助功能设置异常: {e}", flush=True)
 
@@ -131,11 +212,17 @@ def paste_text(text: str) -> bool:
     if not text:
         return True
 
-    trusted = _ax_trusted()
-    print(f"[输入] AXIsProcessTrusted={trusted}", flush=True)
+    trusted = _ax_trusted_with_retry()
+    print(
+        f"[输入] AXIsProcessTrusted={trusted} executable={sys.executable}",
+        flush=True,
+    )
 
     if not trusted:
-        print("[输入] 无辅助功能权限，仅复制到剪贴板，尝试弹出权限请求", flush=True)
+        print(
+            "[输入] 无辅助功能权限，仅复制到剪贴板，尝试弹出权限请求",
+            flush=True,
+        )
         _set_clipboard(text)
         request_accessibility()
         return False

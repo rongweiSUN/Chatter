@@ -72,6 +72,8 @@ class AudioRecorder:
 
     def stop(self):
         """停止录音，将剩余数据和 None 哨兵放入队列。"""
+        if not self.is_recording:
+            return
         if self._stream is not None:
             try:
                 self._stream.stop()

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from Cocoa import NSEvent, NSEventMaskFlagsChanged
+from Cocoa import NSEvent, NSEventMaskFlagsChanged, NSEventMaskKeyDown
 
 _CMD_FLAG = 1 << 20
 _OPTION_FLAG = 1 << 19
@@ -156,3 +156,46 @@ class HotkeyRecorder:
             name = KEY_NAMES.get(kc, f"Key({kc})")
             if self.on_recorded:
                 self.on_recorded(kc, name)
+
+
+_ESC_KEYCODE = 53
+
+
+class EscapeRecordingMonitor:
+    """录音期间监听 ESC，用于取消当前录音（需输入监控权限）。"""
+
+    def __init__(self, on_escape: Callable[[], None] | None = None):
+        self.on_escape = on_escape
+        self._global_monitor = None
+        self._local_monitor = None
+
+    def _maybe_fire(self, event):
+        if event.keyCode() != _ESC_KEYCODE:
+            return
+        if self.on_escape:
+            self.on_escape()
+
+    def _handle_global(self, event):
+        self._maybe_fire(event)
+
+    def _handle_local(self, event):
+        self._maybe_fire(event)
+        return event
+
+    def start(self):
+        if self._global_monitor is not None or self._local_monitor is not None:
+            return
+        self._global_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+            NSEventMaskKeyDown, self._handle_global
+        )
+        self._local_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
+            NSEventMaskKeyDown, self._handle_local
+        )
+
+    def stop(self):
+        if self._global_monitor is not None:
+            NSEvent.removeMonitor_(self._global_monitor)
+            self._global_monitor = None
+        if self._local_monitor is not None:
+            NSEvent.removeMonitor_(self._local_monitor)
+            self._local_monitor = None

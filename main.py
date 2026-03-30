@@ -23,18 +23,24 @@ elif not getattr(sys.stdout, "line_buffering", True):
 
 import objc
 import rumps
-from AppKit import NSImage, NSApp
+from AppKit import NSAlert, NSImage, NSApp
 from Foundation import NSObject, NSNotificationCenter
 
 import config
 from recorder import AudioRecorder
 from asr_client import StreamingSession
-from text_input import paste_text, get_selected_text
-from hotkey import HotkeyMonitor, HotkeyRecorder, KEY_NAMES
+from text_input import accessibility_denied_user_hint, paste_text, get_selected_text
+from hotkey import EscapeRecordingMonitor, HotkeyMonitor, HotkeyRecorder, KEY_NAMES
 from recording_window import get_recording_window
 from app_window import AppWindowController
 from settings import Settings, get_settings, save_settings, reload_settings
-from skill_engine import process_text as _apply_skills, process_with_instruction, ProcessResult
+from skill_engine import (
+    process_text as _apply_skills,
+    process_with_instruction,
+    classify_intent,
+    answer_question,
+    ProcessResult,
+)
 from confirm_dialog import confirm_high_risk
 from voice_agent import handle_voice_command
 
@@ -155,6 +161,7 @@ class VoiceInputApp(rumps.App):
             on_key_up=self._on_hotkey_up,
         )
         self._hotkey_recorder: HotkeyRecorder | None = None
+        self._escape_monitor = EscapeRecordingMonitor(on_escape=self._on_escape_cancel_recording)
 
         self._selected_text: str | None = None
         self._record_mode: str | None = None
@@ -300,13 +307,13 @@ class VoiceInputApp(rumps.App):
             return
 
         self._record_mode = mode
-        self._selected_text = get_selected_text() if mode == "normal" else None
-        if self._selected_text:
-            print(f"[录音] 检测到选中文字({len(self._selected_text)}字)，进入指令模式")
+        self._selected_text = None
 
         self._busy = True
         self._set_icon(self.ICON_RECORDING)
-        self._set_status("助手聆听中..." if mode == "assistant" else "录音中...")
+        self._set_status(
+            "助手聆听中…（按 ESC 取消）" if mode == "assistant" else "录音中…（按 ESC 取消）"
+        )
         self._update_ui_state("recording")
 
         self._recorder.on_level = self._on_audio_level
@@ -324,19 +331,32 @@ class VoiceInputApp(rumps.App):
             )
             return
 
+        self._escape_monitor.start()
+
         self._asr_session = StreamingSession(
             self._recorder.chunk_queue,
             on_partial=self._on_partial_text,
         )
         self._asr_session.start()
 
+        # 在后台线程获取选中文字，避免阻塞主线程 RunLoop
+        if mode == "normal":
+            threading.Thread(target=self._fetch_selected_text, daemon=True).start()
+
         s = get_settings()
         if s.show_float_window:
             self._rec_window.show()
             if mode == "assistant":
                 self._rec_window.update_text("语音助手已召唤，请说指令…")
-            elif self._selected_text:
-                self._rec_window.update_text("请说出对选中文字的指令…")
+
+    def _fetch_selected_text(self):
+        """在后台线程获取选中文字；需要延迟以等待修饰键完全释放。"""
+        time.sleep(0.15)
+        selected = get_selected_text()
+        if selected:
+            self._selected_text = selected
+            print(f"[录音] 检测到选中文字({len(selected)}字)，进入指令模式")
+            self._rec_window.update_text("请说出对选中文字的指令…")
 
     def _on_audio_level(self, level: float):
         self._rec_window.update_level(level)
@@ -362,7 +382,28 @@ class VoiceInputApp(rumps.App):
             return False
         return True
 
+    def _on_escape_cancel_recording(self):
+        """ESC：放弃当前录音，不识别、不粘贴。"""
+        if not self._recorder.is_recording:
+            return
+        print("[录音] ESC 取消", flush=True)
+        self._escape_monitor.stop()
+        self._cancel_assistant_timeout()
+        self._recorder.stop()
+        threading.Thread(target=self._drain_asr_after_cancel, daemon=True).start()
+
+    def _drain_asr_after_cancel(self):
+        try:
+            if self._asr_session:
+                self._asr_session.wait(timeout=8.0)
+        except Exception as e:
+            print(f"[录音] 取消后 ASR 等待: {e}", flush=True)
+        self._dispatcher.call_on_main({"recording_cancelled": True})
+
     def _stop_and_recognize(self):
+        if not self._recorder.is_recording:
+            return
+        self._escape_monitor.stop()
         self._cancel_assistant_timeout()
         self._set_status("识别中...")
         self._update_ui_state("processing")
@@ -418,8 +459,33 @@ class VoiceInputApp(rumps.App):
             elif selected_text:
                 print(f"[等待结果] 指令模式: 选中={selected_text[:30]}, 指令={text[:30]}")
                 try:
+                    from concurrent.futures import ThreadPoolExecutor
                     self._rec_window.show_thinking()
-                    text = process_with_instruction(selected_text, text)
+
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        classify_future = pool.submit(classify_intent, selected_text, text)
+                        rewrite_future = pool.submit(process_with_instruction, selected_text, text)
+
+                        try:
+                            intent = classify_future.result(timeout=6.0)
+                        except Exception as ce:
+                            print(f"[意图分类] 并行调用异常，fallback rewrite: {ce}")
+                            intent = "rewrite"
+
+                        if intent == "question":
+                            rewrite_future.cancel()
+                            print("[等待结果] 意图=提问，启动 answer_question")
+                            answer = answer_question(selected_text, text)
+                            self._dispatcher.call_on_main({
+                                "show_answer": True,
+                                "answer_text": answer,
+                                "question": text,
+                            })
+                            result_text = None
+                            return
+                        else:
+                            print("[等待结果] 意图=改写，等待改写结果")
+                            text = rewrite_future.result(timeout=15.0)
                 except Exception as e:
                     print(f"[指令处理] 异常，保持原文: {e}")
                     notification_info = ("指令处理失败", _friendly_llm_error(e))
@@ -458,6 +524,32 @@ class VoiceInputApp(rumps.App):
             self._push_all_settings()
             return
 
+        if info and info.get("recording_cancelled"):
+            print("[主线程] 录音已取消", flush=True)
+            self._asr_session = None
+            self._record_mode = None
+            self._busy = False
+            self._set_icon(self.ICON_IDLE)
+            self._set_status("就绪")
+            self._update_ui_state("idle")
+            self._rec_window.hide()
+            return
+
+        if info and info.get("show_answer"):
+            print("[主线程] 显示 AI 回答浮窗")
+            self._set_icon(self.ICON_IDLE)
+            self._set_status("就绪")
+            self._update_ui_state("idle")
+            self._rec_window.hide()
+            self._asr_session = None
+            self._record_mode = None
+            self._busy = False
+            self._show_answer_window(
+                info["answer_text"],
+                info.get("question", ""),
+            )
+            return
+
         print("[主线程] cleanup 开始")
         self._set_icon(self.ICON_IDLE)
         self._set_status("就绪")
@@ -475,16 +567,28 @@ class VoiceInputApp(rumps.App):
                 ok = paste_text(text)
                 print(f"[主线程] 粘贴结果: {ok}")
                 if not ok:
-                    self._rec_window.show_result(
-                        "已复制到剪贴板",
-                        "请授予辅助功能权限后重试，或手动 Cmd+V 粘贴",
+                    alert = NSAlert.alloc().init()
+                    alert.setMessageText_("已复制到剪贴板")
+                    alert.setInformativeText_(
+                        "无法模拟键盘自动粘贴。可手动 Cmd+V。\n\n"
+                        + accessibility_denied_user_hint()
                     )
+                    alert.addButtonWithTitle_("好")
+                    alert.runModal()
         elif notif:
             print(f"[主线程] 通知: {notif}")
             self._rec_window.show_result(notif[0], notif[1])
         else:
             self._rec_window.hide()
         print("[主线程] cleanup 完成")
+
+    # ── AI 回答浮窗 ──
+
+    def _show_answer_window(self, answer_text: str, question: str):
+        """在主线程创建并显示 AI 回答浮窗。"""
+        from answer_window import get_answer_window
+        win = get_answer_window()
+        win.show_answer(question, answer_text)
 
     # ── 识别历史 ──
 
@@ -574,6 +678,12 @@ class VoiceInputApp(rumps.App):
             self._bridge_save_skills(args)
         elif method == "open_privacy_settings":
             self._open_privacy_settings()
+        elif method == "open_privacy_microphone":
+            self._open_privacy_microphone()
+        elif method == "open_privacy_accessibility":
+            self._open_privacy_accessibility()
+        elif method == "open_privacy_input_monitoring":
+            self._open_privacy_input_monitoring()
         elif method == "clear_history":
             self._clear_history()
         elif method == "repaste":
@@ -785,11 +895,24 @@ class VoiceInputApp(rumps.App):
     # ── Bridge: 打开系统隐私设置 ──
 
     @staticmethod
-    def _open_privacy_settings():
+    def _open_privacy_page(anchor: str):
         import subprocess
         subprocess.Popen([
-            "open", "x-apple.systempreferences:com.apple.preference.security?Privacy"
+            "open",
+            f"x-apple.systempreferences:com.apple.preference.security?{anchor}",
         ])
+
+    def _open_privacy_settings(self):
+        self._open_privacy_page("Privacy")
+
+    def _open_privacy_microphone(self):
+        self._open_privacy_page("Privacy_Microphone")
+
+    def _open_privacy_accessibility(self):
+        self._open_privacy_page("Privacy_Accessibility")
+
+    def _open_privacy_input_monitoring(self):
+        self._open_privacy_page("Privacy_ListenEvent")
 
     # ── Bridge: 快捷键录制 ──
 
@@ -822,6 +945,7 @@ class VoiceInputApp(rumps.App):
 
     def _quit(self, _sender):
         self._hotkey_monitor.stop()
+        self._escape_monitor.stop()
         if self._recorder.is_recording:
             self._recorder.stop()
         self._rec_window.hide()

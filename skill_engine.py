@@ -144,5 +144,78 @@ def process_with_instruction(selected_text: str, instruction: str) -> str:
     return selected_text
 
 
+def classify_intent(selected_text: str, instruction: str) -> str:
+    """轻量 LLM 调用判断用户意图：改写 or 提问。
+
+    LLM 未配置或调用失败时 fallback 到 rewrite。
+    """
+    s = get_settings()
+    provider_id = s.default_llm
+    provider_cfg = s.providers.get(provider_id, {})
+    if not provider_id or not provider_cfg:
+        return "rewrite"
+
+    system_prompt = (
+        "判断用户对选中文字的操作意图。\n"
+        "如果用户想修改/改写/翻译/润色选中文字，回复 rewrite\n"
+        "如果用户在对选中文字提问/询问/要求解释/分析/总结，回复 question\n"
+        "只回复一个单词：rewrite 或 question"
+    )
+    user_content = f"选中文字：{selected_text[:200]}\n用户语音：{instruction}"
+
+    try:
+        result = call_llm(
+            provider_id=provider_id,
+            provider_cfg=provider_cfg,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.0,
+            timeout=5.0,
+        )
+        if result and "question" in result.strip().lower():
+            print(f"[意图分类] question (原始={result.strip()})")
+            return "question"
+    except Exception as e:
+        print(f"[意图分类] 异常，fallback rewrite: {e}")
+
+    print(f"[意图分类] rewrite")
+    return "rewrite"
+
+
+def answer_question(selected_text: str, question: str) -> str:
+    """对选中文字进行问答，返回回答内容。"""
+    s = get_settings()
+    provider_id = s.default_llm
+    provider_cfg = s.providers.get(provider_id, {})
+    if not provider_id or not provider_cfg:
+        return "未配置大模型，无法回答"
+
+    system_prompt = (
+        "用户选中了一段文字并提出了问题。"
+        "请针对选中的文字内容回答用户的问题。"
+        "回答应简洁、准确、有帮助。使用中文回答。"
+    )
+    user_content = f"【选中的文字】\n{selected_text}\n\n【用户问题】\n{question}"
+
+    print(f"[选中提问] 调用 LLM: 选中{len(selected_text)}字, 问题={question[:40]}")
+    result = call_llm(
+        provider_id=provider_id,
+        provider_cfg=provider_cfg,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=0.3,
+        timeout=15.0,
+    )
+    if result:
+        print(f"[选中提问] LLM 返回: {result[:80]}")
+        return result
+
+    return "抱歉，未能获取回答"
+
+
 def _remove_trailing_punct(text: str) -> str:
     return re.sub(r'[。！？；，、．.!?;,]+$', '', text)

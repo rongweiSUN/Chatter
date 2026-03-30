@@ -23,7 +23,6 @@ from AppKit import (
     NSTextAlignmentCenter,
     NSFloatingWindowLevel,
     NSBezierPath,
-    NSGradient,
 )
 from Foundation import NSObject, NSTimer, NSThread
 
@@ -33,6 +32,11 @@ _WIN_H = 100
 _BAR_COUNT = 20
 _BAR_GAP = 3
 _BAR_MAX_H = 30
+_LEVEL_NOISE_GATE = 0.025
+_LEVEL_ATTACK = 0.42
+_LEVEL_RELEASE = 0.16
+_BAR_INTERP = 0.34
+_THINKING_PHASE_STEP = 0.009
 
 
 class _WaveformView(NSView):
@@ -61,16 +65,22 @@ class _WaveformView(NSView):
 
         bar_total_w = _BAR_COUNT * (_BAR_GAP + 4) - _BAR_GAP
         x_start = (w - bar_total_w) / 2
-
-        accent = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-            0.35, 0.78, 0.98, 1.0
-        )
+        center = (_BAR_COUNT - 1) / 2.0
 
         for i, level in enumerate(self._levels):
-            bar_h = max(3, level * _BAR_MAX_H)
+            # 中间柱略高，边缘略低，让视觉重心更稳定。
+            dist = abs(i - center) / max(center, 1.0)
+            center_weight = 1.0 - 0.38 * (dist ** 1.6)
+            center_weight = max(0.62, center_weight)
+            weighted_level = max(0.0, min(1.0, level * center_weight))
+            bar_h = max(3, 2 + weighted_level * _BAR_MAX_H)
             x = x_start + i * (_BAR_GAP + 4)
             y = (h - bar_h) / 2
 
+            alpha = 0.45 + 0.5 * weighted_level
+            accent = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                0.35, 0.78, 0.98, alpha
+            )
             accent.setFill()
             path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
                 NSMakeRect(x, y, 4, bar_h), 2, 2
@@ -102,51 +112,86 @@ class _GradientBorderView(NSView):
         w = bounds.size.width
         h = bounds.size.height
         radius = 16.0
-        border_w = 2.5
+        border_w = 2.15
 
         colors = [
-            (0.40, 0.85, 1.0),   # cyan
-            (0.55, 0.50, 1.0),   # purple
-            (1.0,  0.40, 0.70),  # pink
-            (1.0,  0.60, 0.25),  # orange
-            (0.30, 0.95, 0.55),  # green
-            (0.40, 0.85, 1.0),   # cyan (loop)
+            (0.22, 0.92, 1.0),   # cyan
+            (0.62, 0.34, 1.0),   # purple
+            (1.0, 0.32, 0.78),   # pink
+            (1.0, 0.58, 0.15),   # amber
+            (0.26, 0.98, 0.58),  # green
+            (0.22, 0.92, 1.0),   # cyan (loop)
         ]
-
-        seg_count = 60
         phase = self._phase
-        perimeter = 2 * (w + h)
+        perimeter = self._rounded_rect_perimeter(w, h, radius)
 
-        for i in range(seg_count):
-            t = (i / seg_count + phase) % 1.0
-            ci = t * (len(colors) - 1)
-            idx = int(ci)
-            frac = ci - idx
-            idx = min(idx, len(colors) - 2)
-            r = colors[idx][0] + (colors[idx + 1][0] - colors[idx][0]) * frac
-            g = colors[idx][1] + (colors[idx + 1][1] - colors[idx][1]) * frac
-            b = colors[idx][2] + (colors[idx + 1][2] - colors[idx][2]) * frac
+        # 底层柔光：略亮、随相位轻微变色，整体更有“流光”感。
+        weak_base = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            NSMakeRect(border_w / 2, border_w / 2, w - border_w, h - border_w),
+            max(0.0, radius - border_w / 2),
+            max(0.0, radius - border_w / 2),
+        )
+        weak_base.setLineWidth_(1.35)
+        tb = 0.5 + 0.5 * math.sin(phase * 2.0 * math.pi)
+        br = 0.42 + 0.22 * tb
+        bg = 0.55 + 0.18 * (1.0 - tb)
+        bb = 0.92 + 0.06 * tb
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(br, bg, bb, 0.26).setStroke()
+        weak_base.stroke()
 
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 0.9).setStroke()
+        seg_count = 52
+        highlight_width = 0.28
 
-            dist_start = (i / seg_count) * perimeter
-            dist_end = ((i + 1) / seg_count) * perimeter
+        # 主高光 + 两道较弱拖尾，形成彩色光带。
+        for alpha_mul, phase_off, width_mul in (
+            (1.0, 0.0, 1.0),
+            (0.4, -0.24, 0.88),
+            (0.22, -0.5, 0.78),
+        ):
+            eff_phase = (phase + phase_off) % 1.0
+            for i in range(seg_count):
+                pos = i / seg_count
+                offset = abs(pos - eff_phase)
+                offset = min(offset, 1.0 - offset)
+                glow = max(0.0, 1.0 - offset / highlight_width)
+                if glow <= 0.01:
+                    continue
 
-            path = NSBezierPath.bezierPath()
-            path.setLineWidth_(border_w)
+                t = (pos * 0.75 + eff_phase) % 1.0
+                ci = t * (len(colors) - 1)
+                idx = int(ci)
+                frac = ci - idx
+                idx = min(idx, len(colors) - 2)
+                r = colors[idx][0] + (colors[idx + 1][0] - colors[idx][0]) * frac
+                g = colors[idx][1] + (colors[idx + 1][1] - colors[idx][1]) * frac
+                b = colors[idx][2] + (colors[idx + 1][2] - colors[idx][2]) * frac
 
-            p_start = self._point_on_rounded_rect(w, h, radius, dist_start)
-            p_end = self._point_on_rounded_rect(w, h, radius, dist_end)
+                alpha = (0.34 + 0.58 * (glow ** 1.45)) * alpha_mul
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, alpha).setStroke()
 
-            path.moveToPoint_(p_start)
+                seg_len = perimeter / seg_count * (0.92 + 0.62 * glow)
+                dist_start = pos * perimeter
+                dist_end = dist_start + seg_len
 
-            steps = 4
-            for s in range(1, steps + 1):
-                d = dist_start + (dist_end - dist_start) * s / steps
-                p = self._point_on_rounded_rect(w, h, radius, d)
-                path.lineToPoint_(p)
+                path = NSBezierPath.bezierPath()
+                lw = (border_w + 1.25 * glow) * width_mul
+                path.setLineWidth_(lw)
 
-            path.stroke()
+                p_start = self._point_on_rounded_rect(w, h, radius, dist_start)
+
+                path.moveToPoint_(p_start)
+
+                steps = 6
+                for s in range(1, steps + 1):
+                    d = dist_start + (dist_end - dist_start) * s / steps
+                    p = self._point_on_rounded_rect(w, h, radius, d)
+                    path.lineToPoint_(p)
+
+                path.stroke()
+
+    def _rounded_rect_perimeter(self, w, h, r):
+        r = min(r, w / 2, h / 2)
+        return 2 * (w + h - 4 * r) + 2 * math.pi * r
 
     def _point_on_rounded_rect(self, w, h, r, dist):
         """沿圆角矩形周长返回对应点坐标。"""
@@ -184,14 +229,14 @@ class _GradientBorderView(NSView):
             return (w - r + r * math.cos(angle), h - r + r * math.sin(angle))
         elif idx == 2:  # right edge: top-to-bottom
             return (w, h - r - frac * (h - 2 * r))
-        elif idx == 3:  # bottom-right corner
-            angle = math.pi / 2 * frac
-            return (w - r + r * math.cos(-angle), r - r * math.sin(-angle))
+        elif idx == 3:  # bottom-right corner，圆心 (w-r, r)，从 (w,r) 到 (w-r,0)
+            theta = -frac * math.pi / 2
+            return (w - r + r * math.cos(theta), r + r * math.sin(theta))
         elif idx == 4:  # bottom edge: right-to-left
             return (w - r - frac * (w - 2 * r), 0)
-        elif idx == 5:  # bottom-left corner
-            angle = math.pi / 2 * frac
-            return (r - r * math.cos(angle), r - r * math.sin(angle))
+        elif idx == 5:  # bottom-left corner，圆心 (r, r)，从 (r,0) 到 (0,r)
+            theta = -math.pi / 2 * (1.0 + frac)
+            return (r + r * math.cos(theta), r + r * math.sin(theta))
         elif idx == 6:  # left edge: bottom-to-top
             return (0, r + frac * (h - 2 * r))
         else:  # top-left corner
@@ -209,6 +254,7 @@ class RecordingWindowController(NSObject):
     _level_history = objc.ivar()
     _timer = objc.ivar()
     _current_level = objc.ivar()
+    _smoothed_level = objc.ivar()
     _gradient_border = objc.ivar()
     _thinking_phase = objc.ivar()
     _is_thinking = objc.ivar()
@@ -220,6 +266,7 @@ class RecordingWindowController(NSObject):
             return None
         self._level_history = [0.0] * _BAR_COUNT
         self._current_level = 0.0
+        self._smoothed_level = 0.0
         self._thinking_phase = 0.0
         self._is_thinking = False
         self._result_timer = None
@@ -292,10 +339,15 @@ class RecordingWindowController(NSObject):
         content.addSubview_(self._gradient_border)
 
     def show(self):
+        self._cancel_result_timer()
         self._text_label.setStringValue_("")
         self._status_label.setStringValue_("正在聆听...")
+        self._status_label.setTextColor_(
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.7, 0.7, 0.7, 1.0)
+        )
         self._level_history = [0.0] * _BAR_COUNT
         self._current_level = 0.0
+        self._smoothed_level = 0.0
         self._is_thinking = False
         self._waveform_view.setHidden_(False)
         self._gradient_border.setHidden_(True)
@@ -341,9 +393,14 @@ class RecordingWindowController(NSObject):
 
     @objc.typedSelector(b"v@:@")
     def _doShowProcessing_(self, _):
+        self._cancel_result_timer()
         self._is_thinking = False
         self._status_label.setStringValue_("识别中...")
+        self._status_label.setTextColor_(
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.7, 0.7, 0.7, 1.0)
+        )
         self._level_history = [0.0] * _BAR_COUNT
+        self._smoothed_level = 0.0
         self._waveform_view.setHidden_(False)
         self._gradient_border.setHidden_(True)
         self._waveform_view.setLevels_(self._level_history)
@@ -368,12 +425,24 @@ class RecordingWindowController(NSObject):
     @objc.typedSelector(b"v@:@")
     def _tick_(self, timer):
         if self._is_thinking:
-            self._thinking_phase = (self._thinking_phase + 0.012) % 1.0
+            self._thinking_phase = (self._thinking_phase + _THINKING_PHASE_STEP) % 1.0
             self._gradient_border.setPhase_(self._thinking_phase)
         else:
-            levels = self._level_history[1:] + [self._current_level]
-            self._level_history = levels
-            self._waveform_view.setLevels_(levels)
+            target = max(0.0, min(1.0, self._current_level))
+            if target < _LEVEL_NOISE_GATE:
+                target = 0.0
+
+            # attack/release 平滑，避免音量突然跳变。
+            coeff = _LEVEL_ATTACK if target >= self._smoothed_level else _LEVEL_RELEASE
+            self._smoothed_level += (target - self._smoothed_level) * coeff
+
+            next_levels = self._level_history[1:] + [self._smoothed_level]
+            blended_levels = [
+                old + (new - old) * _BAR_INTERP
+                for old, new in zip(self._level_history, next_levels)
+            ]
+            self._level_history = blended_levels
+            self._waveform_view.setLevels_(blended_levels)
 
     def show_thinking(self):
         """切换到"思考中"状态，彩色渐变边框旋转。可从任意线程安全调用。"""
@@ -387,9 +456,13 @@ class RecordingWindowController(NSObject):
 
     @objc.typedSelector(b"v@:@")
     def _doShowThinking_(self, _):
+        self._cancel_result_timer()
         self._is_thinking = True
         self._thinking_phase = 0.0
         self._status_label.setStringValue_("思考中...")
+        self._status_label.setTextColor_(
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.7, 0.7, 0.7, 1.0)
+        )
         self._waveform_view.setHidden_(True)
         self._gradient_border.setHidden_(False)
 
@@ -410,9 +483,7 @@ class RecordingWindowController(NSObject):
         message = payload["message"]
         duration = payload["duration"]
 
-        if self._result_timer is not None:
-            self._result_timer.invalidate()
-            self._result_timer = None
+        self._cancel_result_timer()
 
         if self._timer is not None:
             self._timer.invalidate()
@@ -434,6 +505,11 @@ class RecordingWindowController(NSObject):
             objc.selector(self._resultTimerFired_, signature=b"v@:@"),
             None, False,
         )
+
+    def _cancel_result_timer(self):
+        if self._result_timer is not None:
+            self._result_timer.invalidate()
+            self._result_timer = None
 
     @objc.typedSelector(b"v@:@")
     def _resultTimerFired_(self, timer):

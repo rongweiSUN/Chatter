@@ -283,11 +283,47 @@
         </div>
 
         <div class="section">
+          <h2>系统权限</h2>
+          <div class="perm-status-list">
+            <div class="perm-status-row" onclick="pyCall('open_privacy_microphone',{})">
+              <span class="perm-status-icon">🎤</span>
+              <div class="perm-status-info">
+                <span class="perm-status-name">麦克风</span>
+                <span class="perm-status-desc">录制语音</span>
+              </div>
+              <span class="perm-status-action">打开设置 ›</span>
+            </div>
+            <div class="perm-status-row" onclick="pyCall('open_privacy_accessibility',{})">
+              <span class="perm-status-icon">🖐</span>
+              <div class="perm-status-info">
+                <span class="perm-status-name">辅助功能</span>
+                <span class="perm-status-desc">自动粘贴文字</span>
+              </div>
+              <span class="perm-status-action">打开设置 ›</span>
+            </div>
+            <div class="perm-status-row" onclick="pyCall('open_privacy_input_monitoring',{})">
+              <span class="perm-status-icon">⌨️</span>
+              <div class="perm-status-info">
+                <span class="perm-status-name">输入监控</span>
+                <span class="perm-status-desc">全局快捷键</span>
+              </div>
+              <span class="perm-status-action">打开设置 ›</span>
+            </div>
+          </div>
+          <div class="setting-note">
+            更新后若自动粘贴失效：到「辅助功能」中先移除再重新添加随口说
+          </div>
+        </div>
+
+        <div class="section">
           <h2>关于</h2>
           <div class="about-info">
             <div class="about-row"><span>应用名称</span><span>随口说</span></div>
             <div class="about-row"><span>版本</span><span>1.0.0</span></div>
             <div class="about-row"><span>语音引擎</span><span>火山引擎 V3</span></div>
+          </div>
+          <div class="setting-note" style="margin-top: 14px;">
+            <button type="button" class="btn-text" onclick="resetOnboarding()" style="padding: 0;">重新显示新手引导</button>
           </div>
         </div>
 
@@ -347,32 +383,41 @@
         </div>
       </div>
 
-      <!-- Step 1: Permissions -->
+      <!-- Step 1: Accessibility Permission -->
       <div class="ob-slide" data-step="1">
         <div class="ob-slide-visual">
-          <div class="ob-icon-group">
-            <div class="ob-perm-card">
-              <div class="ob-perm-icon">🎤</div>
-              <div class="ob-perm-name">麦克风</div>
-              <div class="ob-perm-desc">录制语音</div>
+          <div class="ob-sys-window">
+            <div class="ob-sys-titlebar">
+              <span class="ob-sys-dot red"></span>
+              <span class="ob-sys-dot yellow"></span>
+              <span class="ob-sys-dot green"></span>
+              <span class="ob-sys-title">辅助功能</span>
             </div>
-            <div class="ob-perm-card">
-              <div class="ob-perm-icon">🖐</div>
-              <div class="ob-perm-name">辅助功能</div>
-              <div class="ob-perm-desc">自动粘贴</div>
-            </div>
-            <div class="ob-perm-card">
-              <div class="ob-perm-icon">⌨</div>
-              <div class="ob-perm-name">输入监控</div>
-              <div class="ob-perm-desc">全局快捷键</div>
+            <div class="ob-sys-body">
+              <div class="ob-sys-sidebar">
+                <div class="ob-sys-nav-item">隐私与安全性</div>
+                <div class="ob-sys-nav-item active">辅助功能</div>
+              </div>
+              <div class="ob-sys-content">
+                <div class="ob-sys-desc">允许下面的应用程序控制你的电脑。</div>
+                <div class="ob-sys-app-row">
+                  <div class="ob-sys-app-icon">🎙</div>
+                  <span class="ob-sys-app-name">随口说</span>
+                  <span class="ob-sys-toggle on"></span>
+                  <span class="ob-sys-arrow-hint">
+                    <span class="ob-sys-arrow-icon">←</span>
+                    <span>打开这里</span>
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
         <div class="ob-slide-content">
-          <h1 class="ob-title">授予系统权限</h1>
-          <p class="ob-desc">随口说需要以下 3 个权限才能正常工作。<br>请前往 <strong>系统设置 → 隐私与安全性</strong>，逐一开启。</p>
+          <h1 class="ob-title">开启辅助功能</h1>
+          <p class="ob-desc">随口说需要「辅助功能」权限来自动粘贴识别结果。<br>点击下方按钮，在系统设置中找到<strong>「随口说」</strong>并打开开关。</p>
           <div class="ob-actions">
-            <button class="ob-btn-secondary" onclick="pyCall('open_privacy_settings',{})">打开系统设置</button>
+            <button class="ob-btn-secondary" onclick="pyCall('open_privacy_accessibility',{})">打开辅助功能设置 →</button>
             <button class="ob-btn-primary" onclick="obNext()">已完成，下一步</button>
           </div>
         </div>
@@ -388,7 +433,6 @@
           <p class="ob-desc">已为你内置<strong>随口说语音识别模型</strong>，开箱即用。<br>你也可以在「模型」页面切换为其他服务商。</p>
           <div class="ob-actions">
             <button class="ob-btn-primary" onclick="obNext()">下一步</button>
-            <button class="ob-btn-text" onclick="finishOnboarding();navigateTo('model')">查看更多模型</button>
           </div>
         </div>
       </div>
@@ -438,40 +482,98 @@
           </p>
           <p class="ob-test-prompt" id="obTestPrompt">按下时，你会看到按键高亮变蓝</p>
           <div class="ob-actions">
-            <button class="ob-btn-secondary" onclick="obChangeHotkey()">不，换个快捷键</button>
+            <button class="ob-btn-secondary" id="obPermChangeBtn" onclick="obChangeHotkey()">换个快捷键</button>
             <button class="ob-btn-primary" id="obTestNextBtn" onclick="obNext()">下一步</button>
           </div>
         </div>
       </div>
 
-      <!-- Step 4: Quick Demo -->
+      <!-- Step 4: Feature Experience -->
       <div class="ob-slide" data-step="4">
-        <div class="ob-slide-visual">
-          <div class="ob-demo-visual">
-            <div class="ob-kbd-hint">
-              <div class="ob-kbd" id="obKbd">⌘ R</div>
-              <div class="ob-kbd-label">短按</div>
+        <div class="ob-step4-layout">
+          <!-- Left: feature info + tabs -->
+          <div class="ob-step4-left">
+            <div class="ob-scene-tabs">
+              <button class="ob-scene-tab active" data-tab="0" onclick="obSwitchScene(0)">
+                <span class="ob-tab-icon">🎙</span> 语音输入
+              </button>
+              <button class="ob-scene-tab" data-tab="1" onclick="obSwitchScene(1)">
+                <span class="ob-tab-icon">✏️</span> 选中改写
+              </button>
+              <button class="ob-scene-tab" data-tab="2" onclick="obSwitchScene(2)">
+                <span class="ob-tab-icon">💬</span> 选中提问
+              </button>
+              <button class="ob-scene-tab" data-tab="3" onclick="obSwitchScene(3)">
+                <span class="ob-tab-icon">🤖</span> 语音助手
+              </button>
+              <button class="ob-scene-tab" data-tab="4" onclick="obSwitchScene(4)">
+                <span class="ob-tab-icon">⚡</span> AI 技能
+              </button>
+              <button class="ob-scene-tab" data-tab="5" onclick="obSwitchScene(5)">
+                <span class="ob-tab-icon">🗣</span> 语音管理
+              </button>
             </div>
-            <div class="ob-demo-arrow">→</div>
-            <div class="ob-demo-flow">
-              <div class="ob-flow-item">
-                <div class="ob-flow-dot ob-dot-rec"></div>
-                <span>录音</span>
+
+            <div class="ob-scene-desc" id="obSceneDesc">
+              <h2 class="ob-step4-title" id="obSceneTitle">语音输入</h2>
+              <p class="ob-step4-desc" id="obSceneText">将光标放在任意输入框中，<strong>短按 <span id="obHotkey">右 Command</span></strong> 键开始录音，再按一次结束。语音即刻转为文字，自动粘贴到光标处。</p>
+            </div>
+
+            <div class="ob-step4-hint" id="obStep4Hint">
+              <span class="ob-step4-hint-icon">💡</span>
+              <span>按下 <strong id="obStep4Key">右 Command</strong> 按一次键，阅读下面的信息，然后按 <strong>右 Command</strong> 键再次插入语音文本。</span>
+            </div>
+
+            <div class="ob-step4-sample" id="obStep4Sample">
+              <em>明天下午三点开会，记得带上季度报告。</em>
+            </div>
+          </div>
+
+          <!-- Right: try-it area with mockup -->
+          <div class="ob-step4-right">
+            <div class="ob-try-mockup">
+              <div class="ob-try-titlebar">
+                <span class="ob-mockup-dot red"></span>
+                <span class="ob-mockup-dot yellow"></span>
+                <span class="ob-mockup-dot green"></span>
+                <span class="ob-try-app">随口说</span>
               </div>
-              <div class="ob-flow-item">
-                <div class="ob-flow-dot ob-dot-ai"></div>
-                <span>AI 处理</span>
-              </div>
-              <div class="ob-flow-item">
-                <div class="ob-flow-dot ob-dot-paste"></div>
-                <span>自动粘贴</span>
+              <textarea class="ob-try-textarea" id="obTryTextarea" placeholder="按下快捷键说一句话…" readonly></textarea>
+              <div class="ob-try-status" id="obTryStatus">
+                <span class="ob-try-status-dot"></span>
+                <span id="obTryStatusText">就绪 — 等待语音输入</span>
               </div>
             </div>
           </div>
         </div>
-        <div class="ob-slide-content">
-          <h1 class="ob-title">开始说话</h1>
-          <p class="ob-desc">将光标放在任意输入框中，<strong>短按 <span id="obHotkey">右 Command</span></strong> 键开始录音，再按一次结束。<br><strong>长按</strong>则进入语音助手模式，松开执行指令。</p>
+
+        <!-- Animations (hidden, positioned absolutely within scenes) -->
+        <div class="ob-feature-carousel ob-step4-carousel" id="obFeatureCarousel">
+          <!-- Scene 0: Voice Input -->
+          <div class="ob-scene active" data-scene="0">
+            <div class="ob-scene-float ob-float-rec" id="obFloatRec">
+              <div class="ob-float-dot"></div>
+              <span>正在聆听...</span>
+            </div>
+          </div>
+          <!-- Scene 1: Select & Rewrite -->
+          <div class="ob-scene" data-scene="1">
+            <div class="ob-scene-float ob-float-think" id="obFloatThink">
+              <div class="ob-float-gradient"></div>
+              <span>思考中...</span>
+            </div>
+          </div>
+          <!-- Scene 2: Select & Ask -->
+          <div class="ob-scene" data-scene="2"></div>
+          <!-- Scene 3: Voice Assistant（无右侧装饰浮窗） -->
+          <div class="ob-scene" data-scene="3"></div>
+          <!-- Scene 4: AI Skills（无右侧装饰浮窗，文案在左侧） -->
+          <div class="ob-scene" data-scene="4"></div>
+          <!-- Scene 5: Voice Management（无右侧装饰浮窗） -->
+          <div class="ob-scene" data-scene="5"></div>
+        </div>
+
+        <div class="ob-slide-content ob-step4-footer">
           <button class="ob-btn-primary ob-btn-done" onclick="finishOnboarding()">开始使用</button>
         </div>
       </div>

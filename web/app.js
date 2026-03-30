@@ -366,9 +366,10 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (document.getElementById('providerModal').classList.contains('open')) {
       closeProviderModal();
-    } else if (recordingHotkey) {
+    } else if (recordingHotkey || obRecordingHotkey) {
       pyCall('cancel_hotkey_record', {});
       stopRecordHotkey(null);
+      obOnHotkeyRecordDone(null);
     }
   }
 });
@@ -492,28 +493,32 @@ function updateSkillsHint(autoRun) {
 /* ── 全屏引导 (Onboarding) ── */
 let obStep = 0;
 const OB_TOTAL = 5;
-let obDismissed = localStorage.getItem('ob_done') === '1';
+const OB_STORAGE_KEY = 'ob_done_v4';
+let obDismissed = localStorage.getItem(OB_STORAGE_KEY) === '1';
 let obTestPassed = false;
 
 function checkShowGuide(settings) {
   const overlay = document.getElementById('onboardingOverlay');
   if (!overlay) return;
 
+  obDismissed = localStorage.getItem(OB_STORAGE_KEY) === '1';
   if (obDismissed) {
     overlay.remove();
     return;
   }
 
-  const hasAsr = Object.values(settings.providers || {}).some(p => p._configured);
+  const providers = settings.providers || {};
+  const hasExternalAsr = Object.entries(providers)
+    .some(([id, p]) => id !== 'builtin_asr' && p._configured);
   const hasHistory = (settings._stats && settings._stats.total > 0);
-  if (hasAsr && hasHistory) {
+  if (hasExternalAsr && hasHistory) {
     finishOnboarding();
     return;
   }
 
   overlay.style.display = 'flex';
   if (settings.hotkey_name) {
-    document.querySelectorAll('#obHotkey, #obTestKeyName').forEach(el => {
+    document.querySelectorAll('#obHotkey, #obTestKeyName, #obStep4Key').forEach(el => {
       el.textContent = settings.hotkey_name;
     });
     obHighlightTargetKey(settings.hotkey_name);
@@ -564,16 +569,32 @@ function obGoTo(step) {
 
   const fill = document.getElementById('obProgressFill');
   if (fill) fill.style.width = ((obStep + 1) / OB_TOTAL * 100) + '%';
+
+  if (obStep === 4) {
+    obStopAnimations();
+    obCurrentScene = -1;
+    obSwitchScene(0);
+    setTimeout(() => obStartTypingAnim(), 500);
+  } else {
+    obStopAnimations();
+  }
 }
 
 function finishOnboarding() {
   obDismissed = true;
-  localStorage.setItem('ob_done', '1');
+  localStorage.setItem(OB_STORAGE_KEY, '1');
   const overlay = document.getElementById('onboardingOverlay');
   if (overlay) {
     overlay.classList.add('hidden');
     setTimeout(() => overlay.remove(), 500);
   }
+}
+
+/** 设置页：重新显示新手引导（须整页刷新以恢复已从 DOM 移除的遮罩） */
+function resetOnboarding() {
+  localStorage.removeItem(OB_STORAGE_KEY);
+  obDismissed = false;
+  location.reload();
 }
 
 function obHighlightTargetKey(hotkeyName) {
@@ -599,10 +620,192 @@ function obOnHotkeyEvent(isDown) {
   }
 }
 
+let obRecordingHotkey = false;
+
 function obChangeHotkey() {
-  finishOnboarding();
-  navigateTo('settings');
-  setTimeout(() => startRecordHotkey(), 300);
+  if (obRecordingHotkey) return;
+  obRecordingHotkey = true;
+  const btn = document.querySelector('#obPermChangeBtn');
+  if (btn) {
+    btn.textContent = '按下新的快捷键… (ESC 取消)';
+    btn.classList.add('ob-btn-recording');
+  }
+  pyCall('start_hotkey_record', {});
+}
+
+function obOnHotkeyRecordDone(keyName) {
+  obRecordingHotkey = false;
+  const btn = document.querySelector('#obPermChangeBtn');
+  if (btn) {
+    btn.textContent = '换个快捷键';
+    btn.classList.remove('ob-btn-recording');
+  }
+  if (keyName) {
+    document.querySelectorAll('#obHotkey, #obTestKeyName, #obStep4Key').forEach(el => {
+      el.textContent = keyName;
+    });
+    obHighlightTargetKey(keyName);
+  }
+}
+
+/* ── Feature carousel in Step 4 ── */
+let obCurrentScene = 0;
+let obTypingTimer = null;
+
+const OB_SCENES = [
+  {
+    title: '语音输入',
+    desc: '将光标放在任意输入框中，<strong>短按快捷键</strong>开始录音，再按一次结束。语音即刻转为文字，自动粘贴到光标处。',
+    hint: '按下 <strong>{key}</strong> 按一次键，阅读下面的信息，然后按 <strong>{key}</strong> 键再次插入语音文本。',
+    sample: '明天下午三点开会，记得带上季度报告。',
+  },
+  {
+    title: '选中改写',
+    desc: '选中一段文字后按下快捷键，说出改写指令（如"翻译成英文""精简一下"），AI 将直接替换原文。',
+    hint: '先选中文本，再按 <strong>{key}</strong> 说出改写指令。',
+    sample: '这个功能很好用我觉得非常不错推荐大家试试 → AI 改写为更通顺的表达',
+  },
+  {
+    title: '选中提问',
+    desc: '选中一段文字后按下快捷键，说出你的问题（如"这什么意思？""帮我分析一下"），AI 弹窗回答，不修改原文。',
+    hint: '选中任意文字后按 <strong>{key}</strong> 提问，AI 弹窗回答。',
+    sample: 'The quick brown fox jumps over the lazy dog → "这什么意思？"',
+  },
+  {
+    title: '语音助手',
+    desc: '无需选中文字，<strong>长按快捷键</strong>直接与 AI 对话。松手后 AI 会语音回答你的问题，适合快速查询和闲聊。',
+    hint: '长按 <strong>{key}</strong> 说话，松手后 AI 语音回答。',
+    sample: '今天天气怎么样？ / 帮我算一下 128 乘以 37',
+  },
+  {
+    title: 'AI 技能',
+    desc: '开启<strong>「技能自动运行」</strong>后，每次语音输入都会自动经过 AI 技能处理。内置口语过滤、自动结构化等技能，还可以创建自定义技能。',
+    hint: '前往「技能」页面，打开<strong>自动运行</strong>开关，启用你需要的技能。',
+    sample: '呃今天那个就是开会嘛讨论了一下方案 → 今天开会讨论了方案',
+  },
+  {
+    title: '语音管理',
+    desc: '<strong>长按快捷键</strong>对语音助手说<strong>「添加一个翻译技能」</strong>，AI 即刻创建并启用翻译技能。也可以说「打开口语过滤」「查看所有技能」等指令。',
+    hint: '长按 <strong>{key}</strong> 说「添加一个翻译技能」，AI 自动完成。',
+    sample: '「添加一个翻译技能」→ 已创建「翻译」技能并启用',
+  },
+];
+
+function obSwitchScene(idx) {
+  if (idx === obCurrentScene) return;
+  obCurrentScene = idx;
+
+  document.querySelectorAll('.ob-scene').forEach(s => {
+    s.classList.toggle('active', +s.dataset.scene === idx);
+  });
+  document.querySelectorAll('.ob-scene-tab').forEach(t => {
+    t.classList.toggle('active', +t.dataset.tab === idx);
+  });
+
+  const scene = OB_SCENES[idx];
+  if (!scene) return;
+  const keyName = currentHotkeyName || '右 Command';
+
+  document.getElementById('obSceneTitle').textContent = scene.title;
+  document.getElementById('obSceneText').innerHTML = scene.desc;
+
+  const hintEl = document.getElementById('obStep4Hint');
+  if (hintEl) {
+    const icon = hintEl.querySelector('.ob-step4-hint-icon');
+    const iconText = icon ? icon.outerHTML : '';
+    hintEl.innerHTML = iconText + '<span>' + scene.hint.replace(/\{key\}/g, keyName) + '</span>';
+  }
+
+  const sampleEl = document.getElementById('obStep4Sample');
+  if (sampleEl) sampleEl.innerHTML = '<em>' + scene.sample + '</em>';
+
+  obStopAnimations();
+  if (idx === 0) obStartTypingAnim();
+  if (idx === 1) obStartRewriteAnim();
+  if (idx === 2) obStartAskAnim();
+}
+
+function obStopAnimations() {
+  if (obTypingTimer) { clearInterval(obTypingTimer); obTypingTimer = null; }
+  document.querySelectorAll('.ob-anim-active').forEach(e => e.classList.remove('ob-anim-active'));
+}
+
+function obStartTypingAnim() {
+  const line = document.getElementById('obTypingLine1');
+  const float = document.getElementById('obFloatRec');
+  if (!line || !float) return;
+
+  const text = '明天下午三点开会，记得带上季度报告';
+  let i = 0;
+  line.textContent = '';
+  float.classList.add('ob-anim-active');
+
+  obTypingTimer = setInterval(() => {
+    if (i < text.length) {
+      line.textContent += text[i];
+      i++;
+    } else {
+      clearInterval(obTypingTimer);
+      obTypingTimer = null;
+      float.classList.remove('ob-anim-active');
+      setTimeout(() => { if (obCurrentScene === 0) obStartTypingAnim(); }, 2000);
+    }
+  }, 80);
+}
+
+function obStartRewriteAnim() {
+  const selected = document.getElementById('obSelected');
+  const result = document.getElementById('obRewriteResult');
+  const float = document.getElementById('obFloatThink');
+  if (!selected || !result || !float) return;
+
+  selected.classList.remove('ob-highlight');
+  result.classList.remove('ob-show');
+  float.classList.remove('ob-anim-active');
+
+  setTimeout(() => selected.classList.add('ob-highlight'), 400);
+  setTimeout(() => float.classList.add('ob-anim-active'), 1000);
+  setTimeout(() => {
+    float.classList.remove('ob-anim-active');
+    selected.classList.remove('ob-highlight');
+    result.classList.add('ob-show');
+  }, 2500);
+  setTimeout(() => {
+    if (obCurrentScene === 1) obStartRewriteAnim();
+  }, 5500);
+}
+
+function obStartAskAnim() {
+  const popup = document.getElementById('obAnswerPopup');
+  if (!popup) return;
+
+  popup.classList.remove('ob-popup-show');
+  setTimeout(() => popup.classList.add('ob-popup-show'), 800);
+  setTimeout(() => {
+    popup.classList.remove('ob-popup-show');
+    if (obCurrentScene === 2) setTimeout(() => obStartAskAnim(), 1000);
+  }, 5000);
+}
+
+function obUpdateTryArea(text) {
+  const textarea = document.getElementById('obTryTextarea');
+  const statusText = document.getElementById('obTryStatusText');
+  const statusEl = document.getElementById('obTryStatus');
+  if (!textarea) return;
+
+  textarea.value = text;
+  if (statusEl) statusEl.classList.remove('recording');
+  if (statusText) statusText.textContent = '识别完成';
+  setTimeout(() => {
+    if (statusText) statusText.textContent = '就绪 — 等待语音输入';
+  }, 4000);
+}
+
+function obSetTryRecording(isRecording) {
+  const statusEl = document.getElementById('obTryStatus');
+  const statusText = document.getElementById('obTryStatusText');
+  if (statusEl) statusEl.classList.toggle('recording', isRecording);
+  if (statusText) statusText.textContent = isRecording ? '正在聆听...' : '就绪 — 等待语音输入';
 }
 
 function navigateTo(page) {
@@ -694,12 +897,15 @@ window.updateState = function(state) {
       dot.classList.add('recording');
       text.textContent = '录音中…';
       obOnHotkeyEvent(true);
+      if (obStep === 4 && !obDismissed) obSetTryRecording(true);
     } else if (state.status === 'processing') {
       dot.classList.add('processing');
       text.textContent = '识别中…';
+      if (obStep === 4 && !obDismissed) obSetTryRecording(false);
     } else {
       text.textContent = '就绪';
       obOnHotkeyEvent(false);
+      if (obStep === 4 && !obDismissed) obSetTryRecording(false);
     }
   }
 
@@ -712,6 +918,9 @@ window.updateState = function(state) {
 
   if (state.history !== undefined) {
     renderHistory(state.history);
+    if (obStep === 4 && !obDismissed && state.history && state.history.length > 0) {
+      obUpdateTryArea(state.history[0].text);
+    }
   }
 };
 
@@ -803,4 +1012,5 @@ window.onProviderSaveResult = function(providerId, ok, message) {
 
 window.onHotkeyRecorded = function(keyName) {
   stopRecordHotkey(keyName);
+  obOnHotkeyRecordDone(keyName);
 };

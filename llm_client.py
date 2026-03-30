@@ -28,7 +28,7 @@ _DEFAULT_MODELS = {
     "deepseek": "deepseek-chat",
     "gemini": "gemini-2.5-flash",
     "qwen": "qwen-plus",
-    "volcengine_llm": "",
+    "volcengine_llm": "doubao-seed-2-0-lite-260215",
     "ollama": "llama3.2",
     "custom_llm": "",
 }

@@ -68,6 +68,21 @@ python setup.py py2app
 
 打包后的应用位于 `dist/随口说.app`。
 
+### 打包为 DMG（便于分发）
+
+在已激活虚拟环境、且已安装 `requirements.txt` 与 `py2app` 的前提下：
+
+```bash
+chmod +x build_dmg.sh
+./build_dmg.sh
+```
+
+生成的磁盘映像为 `dist/随口说.dmg`，内含应用与「应用程序」快捷方式。
+
+- 默认使用 **ad-hoc 签名**（`codesign - -`），本机可运行；若需对外签名，可先执行  
+  `export SIGN_IDENTITY="Developer ID Application: 你的名字 (TEAMID)"` 再运行脚本。
+- `build.sh` 仍可用于仅构建 `.app` 并使用固定证书名签名；DMG 流程以 `build_dmg.sh` 为准。
+
 ## macOS 权限设置
 
 首次运行需要授予以下权限（系统设置 → 隐私与安全性）：
