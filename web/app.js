@@ -37,7 +37,7 @@ const LOGO = {
 /* ── 服务商定义 ── */
 const ASR_PROVIDERS = [
   {
-    id: 'builtin_asr', name: '随口说语音识别', icon: 'suikoushuoa', color: '#0071e3',
+    id: 'builtin_asr', name: '随口说语音识别模型', icon: 'suikoushuoa', color: '#0071e3',
     badge: '内置',
     builtin: true,
     fields: [],
@@ -124,10 +124,10 @@ const LLM_PROVIDERS = [
     ],
   },
   {
-    id: 'volcengine_llm', name: '火山引擎(豆包)', icon: 'volcengine_llm', color: '#3370ff',
+    id: 'volcengine_llm', name: '随口说大模型', icon: 'volcengine_llm', color: '#3370ff',
     fields: [
       { key: 'api_key', label: 'API Key', type: 'password', placeholder: '输入 API Key' },
-      { key: 'model', label: '模型 EP ID', type: 'text', placeholder: '输入推理接入点 ID' },
+      { key: 'model', label: '模型', type: 'text', placeholder: 'openai/gpt-oss-120b' },
     ],
   },
   {
@@ -164,9 +164,9 @@ function renderProviderGrid(containerId, providers, category) {
   if (!grid) return;
   grid.innerHTML = providers.map(p => {
     const cfg = providerConfigs[p.id] || {};
-    const isBuiltin = p.builtin || false;
+    const isBuiltin = p.builtin || cfg._builtin || false;
     const isConfigured = isBuiltin || cfg._configured || false;
-    const badgeHtml = p.badge ? `<span class="provider-badge ${isBuiltin ? 'builtin' : 'local'}">${p.badge}</span>` : '';
+    const badgeHtml = (p.badge || cfg._builtin) ? `<span class="provider-badge builtin">${p.badge || '内置'}</span>` : '';
     const dotClass = isConfigured ? 'provider-status-dot active' : 'provider-status-dot';
     const action = isBuiltin ? '已就绪' : '点击配置';
     const onclick = isBuiltin ? '' : `onclick="openProviderModal('${p.id}','${category}')"`;
@@ -205,33 +205,42 @@ function openProviderModal(providerId, category) {
   document.getElementById('modalName').textContent = p.name + ' 设置';
   document.getElementById('modalCategory').textContent = categoryLabel;
 
+  const isBuiltin = cfg._builtin;
   const body = document.getElementById('modalBody');
-  body.innerHTML = p.fields.map(f => {
-    const val = cfg[f.key] || '';
-    const showWhen = f.showWhen ? `data-show-when='${JSON.stringify(f.showWhen)}'` : '';
-    if (f.type === 'select') {
-      const opts = f.options.map(o =>
-        `<option value="${o.value}" ${val === o.value ? 'selected' : ''}>${o.label}</option>`
-      ).join('');
+  if (isBuiltin) {
+    body.innerHTML = '<div class="form-group"><p style="color:#86868b;font-size:13px;text-align:center;padding:12px 0">此服务已内置，可直接使用</p></div>';
+  } else {
+    body.innerHTML = p.fields.map(f => {
+      const val = cfg[f.key] || '';
+      const showWhen = f.showWhen ? `data-show-when='${JSON.stringify(f.showWhen)}'` : '';
+      if (f.type === 'select') {
+        const opts = f.options.map(o =>
+          `<option value="${o.value}" ${val === o.value ? 'selected' : ''}>${o.label}</option>`
+        ).join('');
+        return `<div class="form-group" ${showWhen}>
+          <label>${f.label}</label>
+          <select data-field="${f.key}" onchange="applyModalShowWhen()">${opts}</select>
+        </div>`;
+      }
       return `<div class="form-group" ${showWhen}>
         <label>${f.label}</label>
-        <select data-field="${f.key}" onchange="applyModalShowWhen()">${opts}</select>
+        <input type="${f.type}" data-field="${f.key}" value="${escapeHtml(val)}" placeholder="${f.placeholder || ''}">
       </div>`;
-    }
-    return `<div class="form-group" ${showWhen}>
-      <label>${f.label}</label>
-      <input type="${f.type}" data-field="${f.key}" value="${escapeHtml(val)}" placeholder="${f.placeholder || ''}">
-    </div>`;
-  }).join('');
+    }).join('');
+  }
 
   const testBtnContainer = document.getElementById('modalTestBtn');
-  testBtnContainer.innerHTML = p.testable
+  testBtnContainer.innerHTML = (!isBuiltin && p.testable)
     ? '<button class="btn btn-secondary" onclick="testModalProvider()">测试连接</button>' : '';
 
   document.getElementById('modalStatus').textContent = '';
   document.getElementById('modalStatus').className = 'form-status';
+
+  const saveBtn = document.querySelector('#providerModal .form-actions .btn-primary');
+  if (saveBtn) saveBtn.style.display = isBuiltin ? 'none' : '';
+
   document.getElementById('providerModal').classList.add('open');
-  applyModalShowWhen();
+  if (!isBuiltin) applyModalShowWhen();
 }
 
 function closeProviderModal() {
@@ -284,16 +293,36 @@ function testModalProvider() {
 function onDefaultProviderChange() {
   const asr = document.getElementById('defaultAsrProvider').value;
   const llm = document.getElementById('defaultLlmProvider').value;
-  pyCall('save_defaults', { default_asr: asr, default_llm: llm });
+  const llmAgent = document.getElementById('defaultLlmAgentProvider').value;
+  pyCall('save_defaults', { default_asr: asr, default_llm: llm, default_llm_agent: llmAgent });
+}
+
+function _buildLlmOptionsHtml(role) {
+  let html = '<option value="">未配置</option>';
+  LLM_PROVIDERS
+    .filter(p => { const c = providerConfigs[p.id] || {}; return c._configured || c._builtin; })
+    .forEach(p => {
+      const cfg = providerConfigs[p.id] || {};
+      let label;
+      if (p.id === 'volcengine_llm') {
+        label = role === 'agent' ? '随口说语音助手大模型' : '随口说语音输入大模型';
+      } else {
+        label = cfg.model || p.name;
+      }
+      html += `<optgroup label="${p.name}"><option value="${p.id}">${label}</option></optgroup>`;
+    });
+  return html;
 }
 
 function refreshDefaultSelectors() {
   const asrSel = document.getElementById('defaultAsrProvider');
   const llmSel = document.getElementById('defaultLlmProvider');
+  const llmAgentSel = document.getElementById('defaultLlmAgentProvider');
   if (!asrSel || !llmSel) return;
 
   const currentAsr = asrSel.value;
   const currentLlm = llmSel.value;
+  const currentLlmAgent = llmAgentSel ? llmAgentSel.value : '';
 
   let asrHtml = '';
   ASR_PROVIDERS
@@ -306,16 +335,13 @@ function refreshDefaultSelectors() {
   asrSel.innerHTML = asrHtml || '<option value="">未配置</option>';
   asrSel.value = currentAsr;
 
-  let llmHtml = '<option value="">未配置</option>';
-  LLM_PROVIDERS
-    .filter(p => (providerConfigs[p.id] || {})._configured)
-    .forEach(p => {
-      const cfg = providerConfigs[p.id] || {};
-      const model = cfg.model || p.name;
-      llmHtml += `<optgroup label="${p.name}"><option value="${p.id}">${model}</option></optgroup>`;
-    });
-  llmSel.innerHTML = llmHtml;
+  llmSel.innerHTML = _buildLlmOptionsHtml('input');
   llmSel.value = currentLlm;
+
+  if (llmAgentSel) {
+    llmAgentSel.innerHTML = _buildLlmOptionsHtml('agent');
+    llmAgentSel.value = currentLlmAgent;
+  }
 }
 
 function initModelPage() {
@@ -787,6 +813,8 @@ function obStartAskAnim() {
   }, 5000);
 }
 
+let _obPasteGuard = false;
+
 function obUpdateTryArea(text) {
   const textarea = document.getElementById('obTryTextarea');
   const statusText = document.getElementById('obTryStatusText');
@@ -794,12 +822,21 @@ function obUpdateTryArea(text) {
   if (!textarea) return;
 
   textarea.value = text;
+  _obPasteGuard = true;
+  setTimeout(() => { _obPasteGuard = false; }, 600);
   if (statusEl) statusEl.classList.remove('recording');
   if (statusText) statusText.textContent = '识别完成';
   setTimeout(() => {
     if (statusText) statusText.textContent = '就绪 — 等待语音输入';
   }, 4000);
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+  const ta = document.getElementById('obTryTextarea');
+  if (ta) ta.addEventListener('paste', (e) => {
+    if (_obPasteGuard) e.preventDefault();
+  });
+});
 
 function obSetTryRecording(isRecording) {
   const statusEl = document.getElementById('obTryStatus');
@@ -963,6 +1000,10 @@ window.loadSettings = function(settings) {
     const el = document.getElementById('defaultLlmProvider');
     if (el) el.value = settings.default_llm;
   }
+  if (settings.default_llm_agent) {
+    const el = document.getElementById('defaultLlmAgentProvider');
+    if (el) el.value = settings.default_llm_agent;
+  }
   if (settings.skills) {
     const sk = settings.skills;
     document.getElementById('skillsAutoRun').checked = !!sk.auto_run;
@@ -1013,4 +1054,11 @@ window.onProviderSaveResult = function(providerId, ok, message) {
 window.onHotkeyRecorded = function(keyName) {
   stopRecordHotkey(keyName);
   obOnHotkeyRecordDone(keyName);
+};
+
+window.updateDeskclawStatus = function(ok, message) {
+  const dot = document.getElementById('deskclawDot');
+  const text = document.getElementById('deskclawStatusText');
+  if (dot) dot.className = 'deskclaw-status-dot ' + (ok ? 'ok' : 'err');
+  if (text) text.textContent = message;
 };

@@ -35,6 +35,44 @@ except OSError:
 _as_lib.AXIsProcessTrusted.restype = ctypes.c_uint8
 _as_lib.AXIsProcessTrusted.argtypes = []
 
+def prompt_accessibility_registration() -> bool:
+    """若尚无辅助功能权限，请求系统弹出授权流程。
+
+    调用 AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: true})
+    触发 macOS 标准对话框，并在「隐私与安全性 → 辅助功能」列表中自动注册本应用。
+
+    使用 pyobjc NSDictionary 构建参数（toll-free bridge CFDictionary），
+    避免 ctypes 手动构建 CF 对象在 py2app 环境中因 kCFBooleanTrue 为空指针导致 SIGSEGV。
+    """
+    if _ax_trusted():
+        return True
+    try:
+        AXOpts = getattr(_as_lib, "AXIsProcessTrustedWithOptions", None)
+        if AXOpts in (None, 0):
+            request_accessibility()
+            return _ax_trusted()
+
+        import objc
+        from Foundation import NSDictionary
+
+        AXOpts.restype = ctypes.c_uint8
+        AXOpts.argtypes = [ctypes.c_void_p]
+
+        opts = NSDictionary.dictionaryWithObject_forKey_(
+            True, "AXTrustedCheckOptionPrompt"
+        )
+        AXOpts(objc.pyobjc_id(opts))
+        time.sleep(0.15)
+        return _ax_trusted()
+    except Exception as e:
+        print(f"[输入] prompt_accessibility_registration 异常: {e}", flush=True)
+        try:
+            request_accessibility()
+        except Exception:
+            pass
+        time.sleep(0.1)
+        return _ax_trusted()
+
 
 def _ax_trusted() -> bool:
     return bool(_as_lib.AXIsProcessTrusted())

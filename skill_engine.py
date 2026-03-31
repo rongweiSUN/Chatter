@@ -105,10 +105,10 @@ def _build_system_prompt(sk: SkillsConfig) -> str:
     return "".join(parts)
 
 
-def process_with_instruction(selected_text: str, instruction: str) -> str:
+def process_with_instruction(selected_text: str, instruction: str) -> str | None:
     """用语音指令处理选中文字：将选中文字和语音指令一起发给 LLM。
 
-    LLM 失败或未配置时返回原始选中文字（不破坏用户内容）。
+    成功返回处理后的文字，LLM 失败或未配置时返回 None。
     """
     s = get_settings()
     provider_id = s.default_llm
@@ -116,7 +116,7 @@ def process_with_instruction(selected_text: str, instruction: str) -> str:
 
     if not provider_id or not provider_cfg:
         print("[指令模式] 未配置大模型，跳过")
-        return selected_text
+        return None
 
     system_prompt = (
         "你是一个文本处理助手。用户选中了一段文字，并通过语音给出了处理指令。\n"
@@ -134,14 +134,15 @@ def process_with_instruction(selected_text: str, instruction: str) -> str:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
+        timeout=15.0,
     )
 
     if result:
         print(f"[指令模式] LLM 返回: {result[:80]}")
         return result
 
-    print("[指令模式] LLM 无返回，保持原文")
-    return selected_text
+    print("[指令模式] LLM 无返回")
+    return None
 
 
 def classify_intent(selected_text: str, instruction: str) -> str:

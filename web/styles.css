@@ -584,6 +584,22 @@ body {
   white-space: nowrap;
 }
 
+.deskclaw-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+.deskclaw-status-dot.ok {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green-glow);
+}
+.deskclaw-status-dot.err {
+  background: var(--red);
+}
+
 /* Model cards */
 .ob-model-cards {
   display: flex;

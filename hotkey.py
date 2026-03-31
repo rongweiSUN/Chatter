@@ -99,6 +99,12 @@ class HotkeyMonitor:
         self._local_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
             NSEventMaskFlagsChanged, self._handle_local
         )
+        if self._global_monitor is None:
+            print(
+                "[HotkeyMonitor] ⚠️ 全局热键监听注册失败，"
+                "可能未授予「输入监控」权限，其它应用前台时热键将无效",
+                flush=True,
+            )
 
     def stop(self):
         if self._global_monitor is not None:
@@ -172,6 +178,8 @@ class EscapeRecordingMonitor:
     def _maybe_fire(self, event):
         if event.keyCode() != _ESC_KEYCODE:
             return
+        if event.isARepeat():
+            return
         if self.on_escape:
             self.on_escape()
 
@@ -191,6 +199,12 @@ class EscapeRecordingMonitor:
         self._local_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
             NSEventMaskKeyDown, self._handle_local
         )
+        if self._global_monitor is None:
+            print(
+                "[EscapeMonitor] ⚠️ 全局 ESC 监听注册失败，"
+                "可能未授予「输入监控」权限",
+                flush=True,
+            )
 
     def stop(self):
         if self._global_monitor is not None:

@@ -29,7 +29,12 @@ from Foundation import NSObject, NSNotificationCenter
 import config
 from recorder import AudioRecorder
 from asr_client import StreamingSession
-from text_input import accessibility_denied_user_hint, paste_text, get_selected_text
+from text_input import (
+    accessibility_denied_user_hint,
+    get_selected_text,
+    paste_text,
+    prompt_accessibility_registration,
+)
 from hotkey import EscapeRecordingMonitor, HotkeyMonitor, HotkeyRecorder, KEY_NAMES
 from recording_window import get_recording_window
 from app_window import AppWindowController
@@ -42,6 +47,7 @@ from skill_engine import (
     ProcessResult,
 )
 from confirm_dialog import confirm_high_risk
+from deskclaw_client import chat as deskclaw_chat, DeskClawUnavailable, is_available as deskclaw_is_available
 from voice_agent import handle_voice_command
 
 _HISTORY_DIR = os.path.join(
@@ -152,6 +158,7 @@ class VoiceInputApp(rumps.App):
         self._asr_session: StreamingSession | None = None
         self._busy = False
         self._rec_window = get_recording_window()
+        self._rec_window.set_cancel_handler(self._on_escape_cancel_recording)
         self._history: list = _load_history()
 
         s = get_settings()
@@ -164,6 +171,7 @@ class VoiceInputApp(rumps.App):
         self._escape_monitor = EscapeRecordingMonitor(on_escape=self._on_escape_cancel_recording)
 
         self._selected_text: str | None = None
+        self._record_session_id: int = 0
         self._record_mode: str | None = None
         self._hotkey_is_down = False
         self._long_press_triggered = False
@@ -202,6 +210,7 @@ class VoiceInputApp(rumps.App):
     # ── 录音控制（短按普通输入 / 长按语音助手） ──
 
     def _on_hotkey_down(self):
+        self._notify_hotkey_event(True)
         if self._busy:
             return
         self._hotkey_is_down = True
@@ -215,6 +224,7 @@ class VoiceInputApp(rumps.App):
         print("[热键] down", flush=True)
 
     def _on_hotkey_up(self):
+        self._notify_hotkey_event(False)
         was_down = self._hotkey_is_down
         triggered = self._long_press_triggered
         self._hotkey_is_down = False
@@ -291,16 +301,26 @@ class VoiceInputApp(rumps.App):
             self._assistant_dispatcher.call_on_main({"action": "timeout_stop"})
 
     def _is_api_configured(self) -> bool:
+        if get_settings().default_asr == "builtin_asr":
+            return True
         if config.AUTH_METHOD == "app_id_token":
             return bool(config.VOLCENGINE_APPID and config.VOLCENGINE_TOKEN)
         return bool(config.VOLCENGINE_APP_KEY)
 
+    def _show_error_alert(self, title: str, message: str):
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_(title)
+        alert.setInformativeText_(message)
+        alert.addButtonWithTitle_("好")
+        alert.runModal()
+
     def _start_recording(self, mode: str = "normal"):
         if not self._is_api_configured():
-            rumps.notification(
-                title="随口说", subtitle="未配置 API",
-                message="请打开主窗口 → 模型页面配置 API 凭证",
+            self._show_error_alert(
+                "未配置语音识别",
+                "请先打开主窗口 → 模型页面，配置 API 凭证后再使用。",
             )
+            self._open_main_window()
             return
 
         if not self._check_microphone():
@@ -308,6 +328,7 @@ class VoiceInputApp(rumps.App):
 
         self._record_mode = mode
         self._selected_text = None
+        self._record_session_id += 1
 
         self._busy = True
         self._set_icon(self.ICON_RECORDING)
@@ -325,10 +346,7 @@ class VoiceInputApp(rumps.App):
             self._set_icon(self.ICON_IDLE)
             self._set_status("就绪")
             self._update_ui_state("idle")
-            rumps.notification(
-                title="随口说", subtitle="录音失败",
-                message=f"无法启动麦克风: {e}",
-            )
+            self._show_error_alert("录音失败", f"无法启动麦克风: {e}")
             return
 
         self._escape_monitor.start()
@@ -339,9 +357,7 @@ class VoiceInputApp(rumps.App):
         )
         self._asr_session.start()
 
-        # 在后台线程获取选中文字，避免阻塞主线程 RunLoop
-        if mode == "normal":
-            threading.Thread(target=self._fetch_selected_text, daemon=True).start()
+        threading.Thread(target=self._fetch_selected_text, daemon=True).start()
 
         s = get_settings()
         if s.show_float_window:
@@ -351,12 +367,20 @@ class VoiceInputApp(rumps.App):
 
     def _fetch_selected_text(self):
         """在后台线程获取选中文字；需要延迟以等待修饰键完全释放。"""
+        sid = self._record_session_id
         time.sleep(0.15)
         selected = get_selected_text()
         if selected:
+            if self._record_session_id != sid:
+                print(f"[录音] 选中文字到达时 session 已过期，丢弃", flush=True)
+                return
             self._selected_text = selected
-            print(f"[录音] 检测到选中文字({len(selected)}字)，进入指令模式")
-            self._rec_window.update_text("请说出对选中文字的指令…")
+            if self._record_mode == "assistant":
+                print(f"[录音] 检测到选中文字({len(selected)}字)，助手模式将附带发送")
+                self._rec_window.update_text("已捕获选中文字，请说指令…")
+            else:
+                print(f"[录音] 检测到选中文字({len(selected)}字)，进入指令模式")
+                self._rec_window.update_text("请说出对选中文字的指令…")
 
     def _on_audio_level(self, level: float):
         self._rec_window.update_level(level)
@@ -369,15 +393,12 @@ class VoiceInputApp(rumps.App):
             import sounddevice as sd
             info = sd.query_devices(kind="input")
             if info is None:
-                rumps.notification(
-                    title="随口说", subtitle="无麦克风",
-                    message="未检测到可用的麦克风设备",
-                )
+                self._show_error_alert("无麦克风", "未检测到可用的麦克风设备。")
                 return False
         except Exception:
-            rumps.notification(
-                title="随口说", subtitle="麦克风不可用",
-                message="请在「系统设置→隐私与安全→麦克风」中允许本应用",
+            self._show_error_alert(
+                "麦克风不可用",
+                "请在「系统设置 → 隐私与安全 → 麦克风」中允许「随口说」访问麦克风。",
             )
             return False
         return True
@@ -403,12 +424,19 @@ class VoiceInputApp(rumps.App):
     def _stop_and_recognize(self):
         if not self._recorder.is_recording:
             return
+        print("[停止录音] 1/6 escape_monitor.stop", flush=True)
         self._escape_monitor.stop()
+        print("[停止录音] 2/6 cancel_timeout", flush=True)
         self._cancel_assistant_timeout()
+        print("[停止录音] 3/6 set_status", flush=True)
         self._set_status("识别中...")
+        print("[停止录音] 4/6 update_ui_state", flush=True)
         self._update_ui_state("processing")
+        print("[停止录音] 5/6 show_processing", flush=True)
         self._rec_window.show_processing()
+        print("[停止录音] 6/6 recorder.stop", flush=True)
         self._recorder.stop()
+        print("[停止录音] 完成，启动_wait_for_result线程", flush=True)
 
         threading.Thread(
             target=self._wait_for_result,
@@ -416,21 +444,26 @@ class VoiceInputApp(rumps.App):
         ).start()
 
     def _wait_for_result(self):
+        print(f"[等待结果] 线程已启动, mode={self._record_mode}", flush=True)
         notification_info = None
         result_text = None
+        assistant_entry = None
         selected_text = self._selected_text
         record_mode = self._record_mode or "normal"
         self._selected_text = None
 
         try:
             if self._asr_session is None:
+                print("[等待结果] asr_session 为 None，直接返回", flush=True)
                 return
 
             session = self._asr_session
+            print("[等待结果] 开始 session.wait(12s)...", flush=True)
             session.wait(timeout=12.0)
+            print("[等待结果] session.wait 已返回", flush=True)
 
             text = session.result
-            print(f"[等待结果] ASR 返回: {repr(text)}, 错误: {session.error}")
+            print(f"[等待结果] ASR 返回: {repr(text)}, 错误: {session.error}", flush=True)
 
             if session.error and not text:
                 notification_info = ("识别失败", _friendly_asr_error(session.error))
@@ -441,20 +474,51 @@ class VoiceInputApp(rumps.App):
                 return
 
             if record_mode == "assistant":
+                self._rec_window.show_thinking()
+
+                print("[助手模式] 调用 handle_voice_command...", flush=True)
                 try:
-                    self._rec_window.show_thinking()
                     agent_result = handle_voice_command(text, require_wake_word=False)
-                    if agent_result.handled:
-                        notification_info = ("语音助手", agent_result.message[:100])
-                        _play_success_sound()
-                    else:
-                        notification_info = ("语音助手", f"未识别指令：{text[:80]}")
+                except Exception as ae:
+                    print(f"[助手模式] 本地 Agent 异常，继续走 DeskClaw: {ae}", flush=True)
+                    agent_result = None
+                print(f"[助手模式] voice_agent 返回: handled={getattr(agent_result, 'handled', None)}, used_tool={getattr(agent_result, 'used_tool', None)}", flush=True)
+
+                if agent_result and agent_result.handled and agent_result.used_tool:
+                    print(f"[助手模式] 本地 Agent 已处理: {agent_result.message[:80]}", flush=True)
+                    _play_success_sound()
+                    notification_info = ("语音助手", agent_result.message[:150])
+                    assistant_entry = {"question": text, "reply": agent_result.message}
                     result_text = None
                     self._dispatcher.call_on_main({"refresh_ui": True})
                     return
+
+                try:
+                    deskclaw_msg = text
+                    if selected_text:
+                        deskclaw_msg = f"[用户选中的文本]\n{selected_text}\n\n[语音指令]\n{text}"
+                        print(f"[助手模式] 附带选中文本({len(selected_text)}字)", flush=True)
+                    print(f"[助手模式] 发送至 DeskClaw: {deskclaw_msg[:80]}", flush=True)
+                    resp = deskclaw_chat(deskclaw_msg)
+                    content = (resp.get("content") or "").strip()
+                    print(f"[助手模式] DeskClaw 回复({len(content)}字): {content[:100]}", flush=True)
+                    assistant_entry = {"question": text, "reply": content or "（无文本回复）"}
+
+                    self._dispatcher.call_on_main({
+                        "show_answer": True,
+                        "answer_text": content or "任务已执行",
+                        "question": text,
+                        "deskclaw_continue": True,
+                    })
+                    _play_success_sound()
+                    result_text = None
+                    return
+                except DeskClawUnavailable:
+                    notification_info = ("DeskClaw 未连接", "请先启动 DeskClaw 应用")
+                    return
                 except Exception as e:
-                    print(f"[助手模式] 异常: {e}")
-                    notification_info = ("语音助手异常", _friendly_llm_error(e))
+                    print(f"[助手模式] DeskClaw 异常: {e}")
+                    notification_info = ("DeskClaw 异常", str(e)[:80])
                     return
             elif selected_text:
                 print(f"[等待结果] 指令模式: 选中={selected_text[:30]}, 指令={text[:30]}")
@@ -485,11 +549,17 @@ class VoiceInputApp(rumps.App):
                             return
                         else:
                             print("[等待结果] 意图=改写，等待改写结果")
-                            text = rewrite_future.result(timeout=15.0)
+                            rewrite_result = rewrite_future.result(timeout=20.0)
+                            if rewrite_result is not None:
+                                text = rewrite_result
+                            else:
+                                print("[指令处理] LLM 未返回结果")
+                                notification_info = ("指令处理失败", "大模型未返回结果，请检查模型配置")
+                                return
                 except Exception as e:
-                    print(f"[指令处理] 异常，保持原文: {e}")
+                    print(f"[指令处理] 异常: {e}")
                     notification_info = ("指令处理失败", _friendly_llm_error(e))
-                    text = selected_text
+                    return
             else:
                 print("[等待结果] 开始技能处理...")
                 try:
@@ -515,7 +585,8 @@ class VoiceInputApp(rumps.App):
             self._record_mode = None
             self._busy = False
             self._dispatcher.call_on_main(
-                {"text": result_text, "notif": notification_info}
+                {"text": result_text, "notif": notification_info,
+                 "assistant_entry": assistant_entry}
             )
 
     def _mainThreadCleanup(self, info):
@@ -547,8 +618,15 @@ class VoiceInputApp(rumps.App):
             self._show_answer_window(
                 info["answer_text"],
                 info.get("question", ""),
+                deskclaw_continue=bool(info.get("deskclaw_continue")),
             )
             return
+
+        assistant_entry = info.get("assistant_entry") if info else None
+        if assistant_entry:
+            self._add_history(
+                assistant_entry["question"], reply=assistant_entry["reply"]
+            )
 
         print("[主线程] cleanup 开始")
         self._set_icon(self.ICON_IDLE)
@@ -584,19 +662,28 @@ class VoiceInputApp(rumps.App):
 
     # ── AI 回答浮窗 ──
 
-    def _show_answer_window(self, answer_text: str, question: str):
+    def _show_answer_window(
+        self,
+        answer_text: str,
+        question: str,
+        *,
+        deskclaw_continue: bool = False,
+    ):
         """在主线程创建并显示 AI 回答浮窗。"""
         from answer_window import get_answer_window
         win = get_answer_window()
-        win.show_answer(question, answer_text)
+        win.show_answer(question, answer_text, deskclaw_continue=deskclaw_continue)
 
     # ── 识别历史 ──
 
-    def _add_history(self, text: str):
+    def _add_history(self, text: str, *, reply: str | None = None):
         entry = {
             "text": text,
             "time": datetime.now().strftime("%m-%d %H:%M"),
         }
+        if reply is not None:
+            entry["reply"] = reply
+            entry["type"] = "assistant"
         self._history.append(entry)
         if len(self._history) > _MAX_HISTORY:
             self._history = self._history[-_MAX_HISTORY:]
@@ -614,12 +701,21 @@ class VoiceInputApp(rumps.App):
             return
 
         for entry in reversed(self._history[-10:]):
-            preview = entry["text"][:30]
-            if len(entry["text"]) > 30:
-                preview += "..."
+            if entry.get("type") == "assistant":
+                q = entry["text"][:12]
+                r = (entry.get("reply") or "")[:15]
+                preview = f"🤖 {q} → {r}"
+                if len(entry["text"]) > 12 or len(entry.get("reply", "")) > 15:
+                    preview += "…"
+                paste_obj = entry.get("reply") or entry["text"]
+            else:
+                preview = entry["text"][:30]
+                if len(entry["text"]) > 30:
+                    preview += "..."
+                paste_obj = entry["text"]
             label = f"[{entry['time']}] {preview}"
             item = rumps.MenuItem(label, callback=self._on_history_click)
-            item.representedObject = entry["text"]
+            item.representedObject = paste_obj
             self._history_menu.add(item)
 
         if len(self._history) > 10:
@@ -662,6 +758,7 @@ class VoiceInputApp(rumps.App):
         if method == "_page_loaded":
             self._push_all_settings()
             self._push_history_to_ui()
+            self._check_deskclaw_status()
         elif method == "save_provider":
             self._bridge_save_provider(args)
         elif method == "test_provider":
@@ -684,6 +781,8 @@ class VoiceInputApp(rumps.App):
             self._open_privacy_accessibility()
         elif method == "open_privacy_input_monitoring":
             self._open_privacy_input_monitoring()
+        elif method == "check_deskclaw":
+            self._check_deskclaw_status()
         elif method == "clear_history":
             self._clear_history()
         elif method == "repaste":
@@ -706,9 +805,25 @@ class VoiceInputApp(rumps.App):
                 "token": v.token,
                 "resource_id": v.resource_id,
                 "_configured": True,
+                "_builtin": v.is_builtin,
             }
 
         providers["builtin_asr"] = {"_configured": True}
+
+        if "volcengine_llm" not in providers or not providers["volcengine_llm"].get("_configured"):
+            providers["volcengine_llm"] = {
+                "api_key": "",
+                "api_url": "https://llm.onerouter.pro/v1",
+                "model": "openai/gpt-oss-120b",
+                "_configured": True,
+            }
+
+        _SECRET_KEYS = ("app_key", "api_key", "token", "appid", "app_id")
+        for prov in providers.values():
+            if prov.get("_builtin"):
+                for k in _SECRET_KEYS:
+                    if k in prov and prov[k]:
+                        prov[k] = ""
 
         data = {
             "auto_paste": s.auto_paste,
@@ -717,7 +832,8 @@ class VoiceInputApp(rumps.App):
             "hotkey_name": s.hotkey_name,
             "providers": providers,
             "default_asr": s.default_asr or "builtin_asr",
-            "default_llm": s.default_llm or "",
+            "default_llm": s.default_llm or "volcengine_llm",
+            "default_llm_agent": s.default_llm_agent or "volcengine_llm",
             "skills": {
                 "auto_run": s.skills.auto_run,
                 "personalize": s.skills.personalize,
@@ -749,6 +865,11 @@ class VoiceInputApp(rumps.App):
         if self._app_window is None or not self._app_window._page_loaded:
             return
         self._app_window.call_js_safe("updateState", {"status": status})
+
+    def _notify_hotkey_event(self, is_down: bool):
+        if self._app_window is None or not self._app_window._page_loaded:
+            return
+        self._app_window.call_js_safe("obOnHotkeyEvent", is_down)
 
     # ── Bridge: 服务商配置 ──
 
@@ -823,6 +944,7 @@ class VoiceInputApp(rumps.App):
         s = get_settings()
         s.default_asr = args.get("default_asr", s.default_asr)
         s.default_llm = args.get("default_llm", s.default_llm)
+        s.default_llm_agent = args.get("default_llm_agent", s.default_llm_agent)
         save_settings(s)
         config.reload()
 
@@ -914,6 +1036,35 @@ class VoiceInputApp(rumps.App):
     def _open_privacy_input_monitoring(self):
         self._open_privacy_page("Privacy_ListenEvent")
 
+    def _warn_input_monitoring_missing(self):
+        """热键全局监听注册失败时弹窗提醒用户授予「输入监控」权限。"""
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("快捷键无法使用")
+        alert.setInformativeText_(
+            "全局快捷键监听注册失败，可能未授予「输入监控」权限。\n\n"
+            "请打开「系统设置 → 隐私与安全性 → 输入监控」，\n"
+            "将「随口说」的开关打开，然后重启应用。\n\n"
+            "没有此权限时，在其它应用中按快捷键将无法触发语音输入。"
+        )
+        alert.addButtonWithTitle_("打开输入监控设置")
+        alert.addButtonWithTitle_("稍后")
+        resp = alert.runModal()
+        if resp == 1000:
+            self._open_privacy_input_monitoring()
+
+    # ── DeskClaw 连接检测 ──
+
+    def _check_deskclaw_status(self):
+        def _check():
+            try:
+                ok = deskclaw_is_available(timeout=3.0)
+            except Exception:
+                ok = False
+            msg = "已连接" if ok else "未连接"
+            if self._app_window:
+                self._app_window.call_js_safe("updateDeskclawStatus", ok, msg)
+        threading.Thread(target=_check, daemon=True).start()
+
     # ── Bridge: 快捷键录制 ──
 
     def _bridge_start_hotkey_record(self):
@@ -966,6 +1117,9 @@ class VoiceInputApp(rumps.App):
         self._rebuild_history_menu()
         self._hotkey_monitor.start()
 
+        if self._hotkey_monitor._global_monitor is None:
+            self._warn_input_monitoring_missing()
+
         self._dock_handler = _DockActivateHandler.alloc().initWithCallback_(
             self._on_dock_activate
         )
@@ -983,6 +1137,13 @@ class VoiceInputApp(rumps.App):
                 title="随口说", subtitle="快捷键: " + get_settings().hotkey_name,
                 message="请先在「模型」页面配置 API 凭证",
             )
+
+        s = get_settings()
+        if s.first_run:
+            try:
+                prompt_accessibility_registration()
+            except Exception as e:
+                print(f"[首次启动] 辅助功能注册异常: {e}", flush=True)
 
     def _on_dock_activate(self):
         if self._app_window is not None and not self._app_window.is_visible:

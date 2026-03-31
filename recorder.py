@@ -76,7 +76,7 @@ class AudioRecorder:
             return
         if self._stream is not None:
             try:
-                self._stream.stop()
+                self._stream.abort()
                 self._stream.close()
             except Exception:
                 pass

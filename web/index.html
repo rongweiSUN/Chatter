@@ -212,14 +212,21 @@
             <select id="defaultAsrProvider" onchange="onDefaultProviderChange()">
               <option value="volcengine">火山引擎</option>
             </select>
-            <div class="model-selector-hint">负责语音转文字，准确听懂你说的每一句话</div>
+            <div class="model-selector-hint">负责语音转文字和语音交互，准确听懂你说的每一句话</div>
           </div>
           <div class="model-selector">
-            <div class="model-selector-label">大模型（技能处理）</div>
+            <div class="model-selector-label">语音输入大模型</div>
             <select id="defaultLlmProvider" onchange="onDefaultProviderChange()">
               <option value="">未配置</option>
             </select>
-            <div class="model-selector-hint">技能启用后，用大模型优化、结构化文本</div>
+            <div class="model-selector-hint">速度优先，帮你优化表达、润色文本等</div>
+          </div>
+          <div class="model-selector">
+            <div class="model-selector-label">语音助手大模型</div>
+            <select id="defaultLlmAgentProvider" onchange="onDefaultProviderChange()">
+              <option value="">未配置</option>
+            </select>
+            <div class="model-selector-hint">智能优先，帮你完成各种复杂操作</div>
           </div>
         </div>
       </div>
@@ -301,17 +308,26 @@
               </div>
               <span class="perm-status-action">打开设置 ›</span>
             </div>
-            <div class="perm-status-row" onclick="pyCall('open_privacy_input_monitoring',{})">
-              <span class="perm-status-icon">⌨️</span>
-              <div class="perm-status-info">
-                <span class="perm-status-name">输入监控</span>
-                <span class="perm-status-desc">全局快捷键</span>
-              </div>
-              <span class="perm-status-action">打开设置 ›</span>
-            </div>
           </div>
           <div class="setting-note">
             更新后若自动粘贴失效：到「辅助功能」中先移除再重新添加随口说
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>外部服务</h2>
+          <div class="perm-status-list">
+            <div class="perm-status-row" id="deskclawStatusRow" onclick="pyCall('check_deskclaw',{})">
+              <span class="perm-status-icon">🤖</span>
+              <div class="perm-status-info">
+                <span class="perm-status-name">DeskClaw</span>
+                <span class="perm-status-desc" id="deskclawStatusText">检测中…</span>
+              </div>
+              <span class="deskclaw-status-dot" id="deskclawDot"></span>
+            </div>
+          </div>
+          <div class="setting-note">
+            长按快捷键可呼叫 DeskClaw 语音助手；点击上方行可刷新连接状态
           </div>
         </div>
 
@@ -538,7 +554,7 @@
                 <span class="ob-mockup-dot green"></span>
                 <span class="ob-try-app">随口说</span>
               </div>
-              <textarea class="ob-try-textarea" id="obTryTextarea" placeholder="按下快捷键说一句话…" readonly></textarea>
+              <textarea class="ob-try-textarea" id="obTryTextarea" placeholder="按下快捷键说一句话…"></textarea>
               <div class="ob-try-status" id="obTryStatus">
                 <span class="ob-try-status-dot"></span>
                 <span id="obTryStatusText">就绪 — 等待语音输入</span>

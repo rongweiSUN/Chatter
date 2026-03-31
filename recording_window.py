@@ -10,6 +10,8 @@ from __future__ import annotations
 import math
 import objc
 from AppKit import (
+    NSBezelStyleRounded,
+    NSButton,
     NSWindow,
     NSView,
     NSTextField,
@@ -259,6 +261,7 @@ class RecordingWindowController(NSObject):
     _thinking_phase = objc.ivar()
     _is_thinking = objc.ivar()
     _result_timer = objc.ivar()
+    _esc_cancel_button = objc.ivar()
 
     def init(self):
         self = objc.super(RecordingWindowController, self).init()
@@ -270,8 +273,13 @@ class RecordingWindowController(NSObject):
         self._thinking_phase = 0.0
         self._is_thinking = False
         self._result_timer = None
+        self._cancel_handler = None
         self._build_window()
         return self
+
+    def set_cancel_handler(self, handler):
+        """录音中指左上角「ESC」或键盘 Esc 时调用，放弃识别。"""
+        self._cancel_handler = handler
 
     def _build_window(self):
         screen = NSScreen.mainScreen()
@@ -299,7 +307,7 @@ class RecordingWindowController(NSObject):
         content.layer().setMasksToBounds_(True)
 
         self._status_label = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(0, _WIN_H - 28, _WIN_W, 20)
+            NSMakeRect(8, _WIN_H - 28, _WIN_W - 16, 20)
         )
         self._status_label.setStringValue_("正在聆听...")
         self._status_label.setBezeled_(False)
@@ -338,6 +346,28 @@ class RecordingWindowController(NSObject):
         self._gradient_border.setHidden_(True)
         content.addSubview_(self._gradient_border)
 
+        self._esc_cancel_button = NSButton.alloc().initWithFrame_(
+            NSMakeRect(8, _WIN_H - 28, 36, 20)
+        )
+        self._esc_cancel_button.setTitle_("esc")
+        self._esc_cancel_button.setToolTip_("取消录音（与键盘左上角 Esc 相同）")
+        self._esc_cancel_button.setBordered_(False)
+        self._esc_cancel_button.setFont_(NSFont.systemFontOfSize_(10))
+        self._esc_cancel_button.setContentTintColor_(
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.55, 0.55, 0.55, 0.6)
+        )
+        self._esc_cancel_button.setTarget_(self)
+        self._esc_cancel_button.setAction_(
+            objc.selector(self.onEscCancelClicked_, signature=b"v@:@")
+        )
+        self._esc_cancel_button.setHidden_(True)
+        content.addSubview_(self._esc_cancel_button)
+
+    @objc.typedSelector(b"v@:@")
+    def onEscCancelClicked_(self, sender):
+        if self._cancel_handler:
+            self._cancel_handler()
+
     def show(self):
         self._cancel_result_timer()
         self._text_label.setStringValue_("")
@@ -351,6 +381,7 @@ class RecordingWindowController(NSObject):
         self._is_thinking = False
         self._waveform_view.setHidden_(False)
         self._gradient_border.setHidden_(True)
+        self._esc_cancel_button.setHidden_(False)
 
         if self._timer is not None:
             self._timer.invalidate()
@@ -403,6 +434,7 @@ class RecordingWindowController(NSObject):
         self._smoothed_level = 0.0
         self._waveform_view.setHidden_(False)
         self._gradient_border.setHidden_(True)
+        self._esc_cancel_button.setHidden_(True)
         self._waveform_view.setLevels_(self._level_history)
 
     def update_level(self, level: float):
@@ -465,6 +497,7 @@ class RecordingWindowController(NSObject):
         )
         self._waveform_view.setHidden_(True)
         self._gradient_border.setHidden_(False)
+        self._esc_cancel_button.setHidden_(True)
 
     def show_result(self, title: str, message: str, duration: float = 2.5):
         """显示结果消息，停留 duration 秒后自动隐藏。可从任意线程调用。"""
@@ -492,6 +525,7 @@ class RecordingWindowController(NSObject):
         self._is_thinking = False
         self._waveform_view.setHidden_(True)
         self._gradient_border.setHidden_(True)
+        self._esc_cancel_button.setHidden_(True)
 
         self._status_label.setStringValue_(title)
         self._status_label.setTextColor_(

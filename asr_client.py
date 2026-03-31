@@ -54,6 +54,8 @@ def _build_header(
 
 
 def _parse_response(data: bytes) -> dict:
+    if len(data) < 4:
+        return {}
     header_size = data[0] & 0x0F
     message_type = data[1] >> 4
     msg_flags = data[1] & 0x0F
@@ -61,29 +63,47 @@ def _parse_response(data: bytes) -> dict:
     compression = data[2] & 0x0F
 
     offset = header_size * 4
+    if offset > len(data):
+        return {}
     result: dict = {}
 
-    if message_type == SERVER_FULL_RESPONSE:
-        if msg_flags in (MTS_POS_SEQ, MTS_LAST_NEG_SEQ):
-            seq = int.from_bytes(data[offset:offset + 4], "big", signed=True)
-            result["sequence"] = seq
+    try:
+        if message_type == SERVER_FULL_RESPONSE:
+            if msg_flags in (MTS_POS_SEQ, MTS_LAST_NEG_SEQ):
+                if offset + 4 > len(data):
+                    return result
+                seq = int.from_bytes(data[offset:offset + 4], "big", signed=True)
+                result["sequence"] = seq
+                offset += 4
+            if offset + 4 > len(data):
+                return result
+            payload_size = int.from_bytes(data[offset:offset + 4], "big", signed=False)
             offset += 4
-        payload_size = int.from_bytes(data[offset:offset + 4], "big", signed=False)
-        offset += 4
-        payload = data[offset:offset + payload_size]
-    elif message_type == SERVER_ERROR:
-        error_code = int.from_bytes(data[offset:offset + 4], "big", signed=False)
-        result["error_code"] = error_code
-        offset += 4
-        payload_size = int.from_bytes(data[offset:offset + 4], "big", signed=False)
-        offset += 4
-        payload = data[offset:offset + payload_size]
-    else:
+            payload = data[offset:offset + payload_size]
+        elif message_type == SERVER_ERROR:
+            if offset + 4 > len(data):
+                return result
+            error_code = int.from_bytes(data[offset:offset + 4], "big", signed=False)
+            result["error_code"] = error_code
+            offset += 4
+            if offset + 4 > len(data):
+                return result
+            payload_size = int.from_bytes(data[offset:offset + 4], "big", signed=False)
+            offset += 4
+            payload = data[offset:offset + payload_size]
+        else:
+            return result
+    except (IndexError, ValueError):
+        print("[ASR] 畸形响应包，跳过", flush=True)
         return result
 
     if payload:
-        if compression == GZIP_COMPRESS:
-            payload = gzip.decompress(payload)
+        try:
+            if compression == GZIP_COMPRESS:
+                payload = gzip.decompress(payload)
+        except (OSError, EOFError):
+            result["payload_raw"] = payload
+            return result
         if serial_method == JSON_SERIAL:
             try:
                 result["payload"] = json.loads(payload.decode("utf-8"))
@@ -290,7 +310,7 @@ class StreamingSession:
 # ── 连接测试（设置窗口用）──
 
 async def _test_connection(
-    auth_method: str = "app_key",
+    auth_method: str = "",
     app_key: str = "",
     appid: str = "",
     token: str = "",

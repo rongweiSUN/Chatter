@@ -17,7 +17,7 @@ _DEFAULT_URLS = {
     "deepseek": "https://api.deepseek.com/v1",
     "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
     "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "volcengine_llm": "https://ark.cn-beijing.volces.com/api/v3",
+    "volcengine_llm": "https://llm.onerouter.pro/v1",
     "ollama": "http://localhost:11434/v1",
     "custom_llm": "",
 }
@@ -28,7 +28,7 @@ _DEFAULT_MODELS = {
     "deepseek": "deepseek-chat",
     "gemini": "gemini-2.5-flash",
     "qwen": "qwen-plus",
-    "volcengine_llm": "doubao-seed-2-0-lite-260215",
+    "volcengine_llm": "openai/gpt-oss-120b",
     "ollama": "llama3.2",
     "custom_llm": "",
 }
@@ -134,6 +134,7 @@ def call_llm(
         return None
 
     api_key = (provider_cfg.get("api_key") or "").strip()
+    print(f"[LLM] {provider_id} url={api_url} model={model} key={'***'+api_key[-6:] if len(api_key)>6 else '(空)'}", flush=True)
 
     payload = {
         "model": model,
