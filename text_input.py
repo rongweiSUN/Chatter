@@ -15,6 +15,7 @@ import sys
 import time
 
 from AppKit import NSPasteboard, NSPasteboardTypeString
+from Foundation import NSDate, NSRunLoop
 from Quartz import (
     CGEventCreateKeyboardEvent,
     CGEventPost,
@@ -22,6 +23,15 @@ from Quartz import (
     kCGEventFlagMaskCommand,
     kCGHIDEventTap,
 )
+
+try:
+    from ApplicationServices import (
+        AXUIElementCreateSystemWide,
+        AXUIElementCopyAttributeValue,
+    )
+    _HAS_AX_ELEMENT = True
+except ImportError:
+    _HAS_AX_ELEMENT = False
 
 # AXIsProcessTrusted：直接从 HIServices 加载；返回值类型为 MacTypes.Boolean（unsigned char）。
 _HISERVICES = (
@@ -84,6 +94,58 @@ def _ax_trusted_with_retry() -> bool:
         return True
     time.sleep(0.2)
     return _ax_trusted()
+
+
+_AX_TEXT_ROLES = {"AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"}
+_FIELD_CONTEXT_MAX = 500
+
+
+def get_frontmost_app_name() -> str | None:
+    """返回当前前台应用的名称（如「备忘录」「微信」「Safari」）。"""
+    try:
+        from AppKit import NSWorkspace
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        return app.localizedName() if app else None
+    except Exception:
+        return None
+
+
+def get_field_context() -> str | None:
+    """通过 AX API 非破坏性地读取当前焦点输入框的已有文本。
+
+    不动剪贴板、不改选区、不模拟按键。
+    需要辅助功能权限；非文本控件或读取失败时返回 None。
+    """
+    if not _HAS_AX_ELEMENT or not _ax_trusted():
+        print("[输入] get_field_context: AX 不可用", flush=True)
+        return None
+    try:
+        system = AXUIElementCreateSystemWide()
+        err, focused = AXUIElementCopyAttributeValue(
+            system, "AXFocusedUIElement", None
+        )
+        if err != 0 or focused is None:
+            print(f"[输入] get_field_context: 无焦点元素 (err={err})", flush=True)
+            return None
+        err, role = AXUIElementCopyAttributeValue(focused, "AXRole", None)
+        if err != 0 or role not in _AX_TEXT_ROLES:
+            print(f"[输入] get_field_context: 非文本控件 (role={role})", flush=True)
+            return None
+        err, value = AXUIElementCopyAttributeValue(focused, "AXValue", None)
+        if err != 0 or not value:
+            print("[输入] get_field_context: 输入框无内容", flush=True)
+            return None
+        text = str(value).strip()
+        if not text:
+            print("[输入] get_field_context: 输入框内容为空", flush=True)
+            return None
+        if len(text) > _FIELD_CONTEXT_MAX:
+            text = text[-_FIELD_CONTEXT_MAX:]
+        print(f"[输入] get_field_context: 读取到{len(text)}字", flush=True)
+        return text
+    except Exception as e:
+        print(f"[输入] get_field_context 异常: {e}", flush=True)
+        return None
 
 
 def accessibility_denied_user_hint() -> str:
@@ -156,20 +218,43 @@ def _simulate_cmd_c() -> bool:
 
 
 def get_selected_text() -> str | None:
-    """通过模拟 Cmd+C 获取当前活跃应用中的选中文字。
+    """获取当前活跃应用中的选中文字。
 
+    优先使用 AXSelectedText（Accessibility API），非破坏性且准确。
+    对不支持该属性的应用，回退到模拟 Cmd+C + 读取剪贴板。
     如果没有选中内容或无辅助功能权限，返回 None。
-    会自动恢复原有剪贴板内容。
     """
     if not _ax_trusted_with_retry():
         print("[输入] get_selected_text: 无辅助功能权限", flush=True)
         return None
 
+    # ── 优先尝试 AXSelectedText（不动剪贴板） ──
+    if _HAS_AX_ELEMENT:
+        try:
+            system = AXUIElementCreateSystemWide()
+            err, focused = AXUIElementCopyAttributeValue(
+                system, "AXFocusedUIElement", None
+            )
+            if err == 0 and focused is not None:
+                err_sel, ax_sel = AXUIElementCopyAttributeValue(
+                    focused, "AXSelectedText", None
+                )
+                if err_sel == 0:
+                    text = str(ax_sel).strip() if ax_sel else ""
+                    if text:
+                        print(f"[输入] AXSelectedText 检测到选中文字: {text[:50]}", flush=True)
+                        return text
+                    print("[输入] AXSelectedText: 无选中内容", flush=True)
+                    return None
+        except Exception as e:
+            print(f"[输入] AXSelectedText 异常，回退到 Cmd+C: {e}", flush=True)
+
+    # ── 回退：模拟 Cmd+C + 剪贴板 ──
     old = _get_clipboard()
-    old_count = NSPasteboard.generalPasteboard().changeCount()
 
     pb = NSPasteboard.generalPasteboard()
     pb.clearContents()
+    count_after_clear = pb.changeCount()
 
     if not _simulate_cmd_c():
         print("[输入] get_selected_text: simulate_cmd_c 失败", flush=True)
@@ -177,12 +262,19 @@ def get_selected_text() -> str | None:
             _set_clipboard(old)
         return None
 
-    # 轮询等待剪贴板 changeCount 变化（目标应用写入），最多 0.5 秒
     deadline = time.monotonic() + 0.5
+    changed = False
     while time.monotonic() < deadline:
         time.sleep(0.05)
-        if NSPasteboard.generalPasteboard().changeCount() != old_count:
+        if NSPasteboard.generalPasteboard().changeCount() != count_after_clear:
+            changed = True
             break
+
+    if not changed:
+        if old is not None:
+            _set_clipboard(old)
+        print("[输入] get_selected_text: 剪贴板未变化，无选中内容", flush=True)
+        return None
 
     selected = _get_clipboard()
 
@@ -274,7 +366,13 @@ def paste_text(text: str) -> bool:
     print(f"[输入] 粘贴{'成功' if ok else '失败'}: {text}", flush=True)
 
     if ok:
-        time.sleep(0.3)
+        # Pump the run loop instead of blocking with time.sleep so that
+        # the Cmd+V event can be delivered when the focused window belongs
+        # to our own process (the main thread must be unblocked for macOS
+        # to dispatch the keyboard event to our WKWebView).
+        NSRunLoop.currentRunLoop().runUntilDate_(
+            NSDate.dateWithTimeIntervalSinceNow_(0.3)
+        )
         if old_clipboard is not None:
             _set_clipboard(old_clipboard)
 

@@ -2,7 +2,9 @@ rumps
 pyobjc-framework-Cocoa
 pyobjc-framework-WebKit
 pyobjc-framework-Quartz
+pyobjc-framework-ApplicationServices
 sounddevice
 numpy
 websockets
 python-dotenv
+certifi

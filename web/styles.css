@@ -1356,9 +1356,55 @@ body {
   box-shadow: 0 0 12px var(--orange-glow);
 }
 
+.status-indicator.executing {
+  background: var(--purple);
+  box-shadow: 0 0 12px var(--purple-glow);
+  animation: executePulse 2s ease-in-out infinite;
+}
+
+@keyframes executePulse {
+  0%, 100% { transform: scale(1); opacity: 1; box-shadow: 0 0 12px var(--purple-glow); }
+  50% { transform: scale(1.2); opacity: 0.8; box-shadow: 0 0 20px var(--purple-glow); }
+}
+
 @keyframes pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.4); opacity: 0.6; }
+}
+
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  animation: fadeIn 0.3s ease;
+}
+
+.task-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+}
+
+.task-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--purple);
+  box-shadow: 0 0 6px var(--purple-glow);
+  animation: executePulse 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.task-name {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .status-text {
@@ -2203,6 +2249,25 @@ body {
 
 .skill-body textarea::placeholder {
   color: var(--text-muted);
+}
+
+.auto-learn-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.auto-learn-check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 /* ── 自定义技能 ── */

@@ -117,8 +117,13 @@ def _parse_response(data: bytes) -> dict:
     return result
 
 
-def _build_v3_request_payload() -> dict:
-    return {
+_HOTWORD_MAX_LINES = 100
+_HOTWORD_MAX_CHAR_PER_LINE = 50
+_HOTWORD_MAX_TOTAL_CHARS = 5000
+
+
+def _build_v3_request_payload(hotwords: list[str] | None = None) -> dict:
+    payload = {
         "user": {"uid": "voice-input-mac"},
         "audio": {
             "format": "pcm",
@@ -137,6 +142,27 @@ def _build_v3_request_payload() -> dict:
             "result_type": "full",
         },
     }
+
+    if hotwords:
+        trimmed = [w[:_HOTWORD_MAX_CHAR_PER_LINE] for w in hotwords]
+        total = 0
+        selected: list[str] = []
+        for w in trimmed[:_HOTWORD_MAX_LINES]:
+            if total + len(w) > _HOTWORD_MAX_TOTAL_CHARS:
+                break
+            selected.append(w)
+            total += len(w)
+
+        if selected:
+            payload["corpus"] = {
+                "context": {
+                    "context_type": "dialog_ctx",
+                    "context_data": [{"text": w} for w in selected],
+                }
+            }
+            print(f"[ASR] 热词已注入: {len(selected)} 个", flush=True)
+
+    return payload
 
 
 def _build_auth_headers(
@@ -182,9 +208,11 @@ class StreamingSession:
     设置 on_partial 回调可实时获取中间识别结果。
     """
 
-    def __init__(self, chunk_queue: queue.Queue, on_partial=None):
+    def __init__(self, chunk_queue: queue.Queue, on_partial=None,
+                 hotwords: list[str] | None = None):
         self._chunk_queue = chunk_queue
         self._on_partial = on_partial
+        self._hotwords = hotwords
         self._result_text = ""
         self._error: str | None = None
         self._done_event = threading.Event()
@@ -222,13 +250,24 @@ class StreamingSession:
             self._done_event.set()
 
     async def _session(self):
-        request_payload = _build_v3_request_payload()
+        request_payload = _build_v3_request_payload(self._hotwords)
         payload_bytes = gzip.compress(json.dumps(request_payload).encode("utf-8"))
         full_request = bytearray(_build_header(CLIENT_FULL_REQUEST, MTS_NO_SEQ, JSON_SERIAL, GZIP_COMPRESS))
         full_request.extend(len(payload_bytes).to_bytes(4, "big"))
         full_request.extend(payload_bytes)
 
         auth_headers = _build_auth_headers()
+        _appid = config.VOLCENGINE_APPID
+        _token = config.VOLCENGINE_TOKEN
+        _appkey = config.VOLCENGINE_APP_KEY
+        print(
+            f"[ASR] 认证头: method={config.AUTH_METHOD}, "
+            f"appid={_appid[:4]+'***' if _appid else '(空)'}, "
+            f"token={_token[:4]+'***' if _token else '(空)'}, "
+            f"app_key={_appkey[:4]+'***' if _appkey else '(空)'}, "
+            f"resource_id={config.VOLCENGINE_RESOURCE_ID}",
+            flush=True,
+        )
 
         async with websockets.connect(
             config.ASR_WS_URL, additional_headers=auth_headers, max_size=1_000_000

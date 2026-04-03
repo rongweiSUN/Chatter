@@ -62,6 +62,8 @@
           </div>
         </div>
 
+        <div class="task-list" id="taskList" style="display:none;"></div>
+
         <div class="stats-row">
           <div class="stat-card">
             <div class="stat-value" id="statTotal">0</div>
@@ -140,6 +142,10 @@
           </div>
           <div class="skill-body" id="userDictBody">
             <textarea id="userDictText" placeholder="每行一个词条，例如：&#10;PyObjC&#10;WebSocket&#10;火山引擎" onchange="onSkillChanged()"></textarea>
+            <label class="auto-learn-check">
+              <input type="checkbox" id="skillAutoLearnDict" onchange="onSkillChanged()">
+              <span>自动学习：语音输入后的打字修正将自动添加到词典</span>
+            </label>
           </div>
         </div>
 

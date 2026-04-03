@@ -414,6 +414,7 @@ function onSkillChanged() {
     personalize_text: document.getElementById('personalizeText').value,
     user_dict: document.getElementById('skillUserDict').checked,
     user_dict_text: document.getElementById('userDictText').value,
+    auto_learn_dict: document.getElementById('skillAutoLearnDict').checked,
     auto_structure: document.getElementById('skillAutoStructure').checked,
     oral_filter: document.getElementById('skillOralFilter').checked,
     remove_trailing_punct: document.getElementById('skillRemovePunct').checked,
@@ -929,21 +930,42 @@ window.updateState = function(state) {
   if (state.status !== undefined) {
     const dot = document.getElementById('statusDot');
     const text = document.getElementById('statusText');
+    const hint = document.querySelector('.status-hint');
     dot.className = 'status-indicator';
     if (state.status === 'recording') {
       dot.classList.add('recording');
       text.textContent = '录音中…';
+      if (hint) hint.textContent = '松开按键结束录音';
       obOnHotkeyEvent(true);
       if (obStep === 4 && !obDismissed) obSetTryRecording(true);
     } else if (state.status === 'processing') {
       dot.classList.add('processing');
       text.textContent = '识别中…';
+      if (hint) hint.textContent = '正在识别语音…';
+      if (obStep === 4 && !obDismissed) obSetTryRecording(false);
+    } else if (state.status === 'executing') {
+      dot.classList.add('executing');
+      var tasks = state.tasks || [];
+      if (tasks.length === 1) {
+        text.textContent = '正在执行任务' + tasks[0].id + ': ' + tasks[0].name;
+      } else if (tasks.length > 1) {
+        text.textContent = '正在执行 ' + tasks.length + ' 个任务';
+      } else {
+        text.textContent = '正在执行任务…';
+      }
+      if (hint) hint.textContent = '可继续使用语音输入';
+      obOnHotkeyEvent(false);
       if (obStep === 4 && !obDismissed) obSetTryRecording(false);
     } else {
       text.textContent = '就绪';
+      if (hint) hint.textContent = '短按右 Command 键开始语音输入';
       obOnHotkeyEvent(false);
       if (obStep === 4 && !obDismissed) obSetTryRecording(false);
     }
+  }
+
+  if (state.tasks !== undefined) {
+    renderTaskList(state.tasks || []);
   }
 
   if (state.stats) {
@@ -960,6 +982,23 @@ window.updateState = function(state) {
     }
   }
 };
+
+function renderTaskList(tasks) {
+  var container = document.getElementById('taskList');
+  if (!container) return;
+  if (!tasks || tasks.length === 0) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  container.style.display = 'flex';
+  container.innerHTML = tasks.map(function(t) {
+    return '<div class="task-item">' +
+      '<div class="task-dot"></div>' +
+      '<span class="task-name">任务' + t.id + ': ' + (t.name || '') + '</span>' +
+      '</div>';
+  }).join('');
+}
 
 window.updateConnectionStatus = function(ok, message) {
   const dot = document.querySelector('#connStatus .conn-dot');
@@ -1011,6 +1050,7 @@ window.loadSettings = function(settings) {
     document.getElementById('personalizeText').value = sk.personalize_text || '';
     document.getElementById('skillUserDict').checked = !!sk.user_dict;
     document.getElementById('userDictText').value = sk.user_dict_text || '';
+    document.getElementById('skillAutoLearnDict').checked = !!sk.auto_learn_dict;
     document.getElementById('skillAutoStructure').checked = !!sk.auto_structure;
     document.getElementById('skillOralFilter').checked = !!sk.oral_filter;
     document.getElementById('skillRemovePunct').checked = !!sk.remove_trailing_punct;

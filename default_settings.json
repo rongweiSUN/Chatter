@@ -11,13 +11,13 @@
   },
   "providers": {
     "volcengine_llm": {
-      "api_key": "",
+      "api_key": "***REMOVED***",
       "api_url": "https://llm.onerouter.pro/v1",
       "model": "openai/gpt-oss-120b",
       "_configured": true
     },
     "builtin_agent": {
-      "api_key": "",
+      "api_key": "***REMOVED***",
       "api_url": "https://llm.onerouter.pro/v1",
       "model": "google/gemini-3-flash-preview",
       "_configured": true

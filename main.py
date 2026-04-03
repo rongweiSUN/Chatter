@@ -23,7 +23,7 @@ elif not getattr(sys.stdout, "line_buffering", True):
 
 import objc
 import rumps
-from AppKit import NSAlert, NSImage, NSApp
+from AppKit import NSAlert, NSBezierPath, NSColor, NSCompositingOperationSourceOver, NSImage, NSApp
 from Foundation import NSObject, NSNotificationCenter
 
 import config
@@ -31,6 +31,8 @@ from recorder import AudioRecorder
 from asr_client import StreamingSession
 from text_input import (
     accessibility_denied_user_hint,
+    get_field_context,
+    get_frontmost_app_name,
     get_selected_text,
     paste_text,
     prompt_accessibility_registration,
@@ -49,6 +51,8 @@ from skill_engine import (
 from confirm_dialog import confirm_high_risk
 from deskclaw_client import chat as deskclaw_chat, DeskClawUnavailable, is_available as deskclaw_is_available
 from voice_agent import handle_voice_command
+from dict_learner import start_learning as _start_dict_learning, set_on_learned
+from task_manager import TaskManager, Task, TaskStatus
 
 _HISTORY_DIR = os.path.join(
     os.path.expanduser("~"), "Library", "Application Support", "VoiceInput"
@@ -116,10 +120,36 @@ def _friendly_llm_error(e: Exception) -> str:
     return f"LLM 处理出错，请稍后重试（{raw[:60]}）"
 
 
+def _apply_icon_mask(img: NSImage) -> NSImage:
+    """为 Dock 图标应用 macOS squircle 圆角蒙版，并缩小以匹配系统图标视觉大小。"""
+    from Foundation import NSMakeRect, NSZeroRect
+    sz = img.size()
+    w, h = sz.width, sz.height
+    pad = w * 0.07
+    iw, ih = w - 2 * pad, h - 2 * pad
+    radius = iw * 0.2237
+
+    masked = NSImage.alloc().initWithSize_(sz)
+    masked.lockFocus()
+    NSColor.clearColor().set()
+    NSBezierPath.fillRect_(NSMakeRect(0, 0, w, h))
+    clip = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+        NSMakeRect(pad, pad, iw, ih), radius, radius
+    )
+    clip.addClip()
+    img.drawInRect_fromRect_operation_fraction_(
+        NSMakeRect(0, 0, w, h), NSZeroRect, NSCompositingOperationSourceOver, 1.0
+    )
+    masked.unlockFocus()
+    return masked
+
+
 def _sf_icon(name: str, fallback: str = "随口说") -> NSImage | str:
+    from Foundation import NSMakeSize
     try:
         img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, None)
         if img is not None:
+            img.setSize_(NSMakeSize(18, 18))
             img.setTemplate_(True)
             return img
     except Exception:
@@ -156,8 +186,14 @@ class VoiceInputApp(rumps.App):
 
         self._recorder = AudioRecorder()
         self._asr_session: StreamingSession | None = None
-        self._busy = False
+        self._recording_busy = False
         self._rec_window = get_recording_window()
+        self._task_manager = TaskManager(
+            on_status_change=self._on_task_status_change,
+            on_task_complete=self._on_task_complete,
+        )
+        self._pending_results: list[dict] = []
+        self._pending_lock = threading.Lock()
         self._rec_window.set_cancel_handler(self._on_escape_cancel_recording)
         self._history: list = _load_history()
 
@@ -184,6 +220,15 @@ class VoiceInputApp(rumps.App):
         self._assistant_dispatcher = _MainThreadDispatcher.alloc().initWithCallback_(
             self._on_assistant_dispatch
         )
+        self._task_dispatcher = _MainThreadDispatcher.alloc().initWithCallback_(
+            self._on_task_dispatch
+        )
+        self._dict_learn_dispatcher = _MainThreadDispatcher.alloc().initWithCallback_(
+            self._on_dict_learned
+        )
+        set_on_learned(lambda words: self._dict_learn_dispatcher.call_on_main(
+            {"words": words}
+        ))
 
     def _set_dock_icon(self):
         for base in [
@@ -194,7 +239,7 @@ class VoiceInputApp(rumps.App):
             if os.path.exists(icon_path):
                 img = NSImage.alloc().initWithContentsOfFile_(icon_path)
                 if img:
-                    NSApp.setApplicationIconImage_(img)
+                    NSApp.setApplicationIconImage_(_apply_icon_mask(img))
                     return
 
     def _set_icon(self, icon_img):
@@ -211,10 +256,12 @@ class VoiceInputApp(rumps.App):
 
     def _on_hotkey_down(self):
         self._notify_hotkey_event(True)
-        if self._busy:
+        if self._recording_busy:
             return
         self._hotkey_is_down = True
         self._long_press_triggered = False
+        self._pre_field_context = get_field_context()
+        self._pre_app_name = get_frontmost_app_name()
         self._cancel_hold_timer()
         self._hold_timer = threading.Timer(
             self._long_press_sec, self._on_long_press_detected
@@ -229,13 +276,13 @@ class VoiceInputApp(rumps.App):
         triggered = self._long_press_triggered
         self._hotkey_is_down = False
         self._cancel_hold_timer()
-        print(f"[热键] up  triggered={triggered} recording={self._recorder.is_recording} busy={self._busy}", flush=True)
+        print(f"[热键] up  triggered={triggered} recording={self._recorder.is_recording} busy={self._recording_busy}", flush=True)
 
         if self._recorder.is_recording:
             self._stop_and_recognize()
             return
 
-        if was_down and not triggered and not self._busy:
+        if was_down and not triggered and not self._recording_busy:
             self._start_recording(mode="normal")
 
     def _cancel_hold_timer(self):
@@ -245,7 +292,7 @@ class VoiceInputApp(rumps.App):
 
     def _on_long_press_detected(self):
         """子线程定时器触发：标记长按，调度主线程启动助手录音。"""
-        if self._hotkey_is_down and not self._busy:
+        if self._hotkey_is_down and not self._recording_busy:
             self._long_press_triggered = True
             print("[热键] 长按检测到，调度助手")
             self._assistant_dispatcher.call_on_main({"action": "start_assistant"})
@@ -257,7 +304,7 @@ class VoiceInputApp(rumps.App):
             if not self._hotkey_is_down:
                 print("[热键] 助手调度到达时按键已松开，跳过")
                 return
-            if not self._busy and not self._recorder.is_recording:
+            if not self._recording_busy and not self._recorder.is_recording:
                 print("[热键] 主线程启动助手录音")
                 self._start_recording(mode="assistant")
                 self._start_assistant_timeout()
@@ -314,6 +361,16 @@ class VoiceInputApp(rumps.App):
         alert.addButtonWithTitle_("好")
         alert.runModal()
 
+    @staticmethod
+    def _get_hotwords() -> list[str] | None:
+        """从用户词典提取热词列表，供 ASR 引擎优先匹配。"""
+        s = get_settings()
+        sk = s.skills
+        if not sk.user_dict or not sk.user_dict_text.strip():
+            return None
+        words = [w.strip() for w in sk.user_dict_text.strip().split("\n") if w.strip()]
+        return words or None
+
     def _start_recording(self, mode: str = "normal"):
         if not self._is_api_configured():
             self._show_error_alert(
@@ -328,9 +385,13 @@ class VoiceInputApp(rumps.App):
 
         self._record_mode = mode
         self._selected_text = None
+        self._field_context = getattr(self, '_pre_field_context', None) or get_field_context()
+        self._pre_field_context = None
+        self._app_name = getattr(self, '_pre_app_name', None) or get_frontmost_app_name()
+        self._pre_app_name = None
         self._record_session_id += 1
 
-        self._busy = True
+        self._recording_busy = True
         self._set_icon(self.ICON_RECORDING)
         self._set_status(
             "助手聆听中…（按 ESC 取消）" if mode == "assistant" else "录音中…（按 ESC 取消）"
@@ -342,18 +403,19 @@ class VoiceInputApp(rumps.App):
         try:
             self._recorder.start()
         except Exception as e:
-            self._busy = False
+            self._recording_busy = False
             self._set_icon(self.ICON_IDLE)
-            self._set_status("就绪")
-            self._update_ui_state("idle")
+            self._update_status_display()
             self._show_error_alert("录音失败", f"无法启动麦克风: {e}")
             return
 
         self._escape_monitor.start()
 
+        hotwords = self._get_hotwords()
         self._asr_session = StreamingSession(
             self._recorder.chunk_queue,
             on_partial=self._on_partial_text,
+            hotwords=hotwords,
         )
         self._asr_session.start()
 
@@ -419,7 +481,8 @@ class VoiceInputApp(rumps.App):
                 self._asr_session.wait(timeout=8.0)
         except Exception as e:
             print(f"[录音] 取消后 ASR 等待: {e}", flush=True)
-        self._dispatcher.call_on_main({"recording_cancelled": True})
+        finally:
+            self._dispatcher.call_on_main({"recording_cancelled": True})
 
     def _stop_and_recognize(self):
         if not self._recorder.is_recording:
@@ -444,13 +507,16 @@ class VoiceInputApp(rumps.App):
         ).start()
 
     def _wait_for_result(self):
+        """阶段一：等待 ASR 结果，然后释放录音锁并提交后续处理为后台任务。"""
         print(f"[等待结果] 线程已启动, mode={self._record_mode}", flush=True)
-        notification_info = None
-        result_text = None
-        assistant_entry = None
         selected_text = self._selected_text
+        field_context = self._field_context
+        app_name = getattr(self, '_app_name', None)
         record_mode = self._record_mode or "normal"
         self._selected_text = None
+        self._field_context = None
+        self._app_name = None
+        notification_info = None
 
         try:
             if self._asr_session is None:
@@ -473,124 +539,154 @@ class VoiceInputApp(rumps.App):
                 notification_info = ("未识别到内容", "请靠近麦克风清晰说话后重试")
                 return
 
+            task_name = text[:10].strip()
             if record_mode == "assistant":
+                self._task_manager.submit(
+                    task_name,
+                    self._task_assistant, text, selected_text,
+                )
+                self._rec_window.show_result("已提交任务", task_name, duration=1.5)
+            elif selected_text:
+                threading.Thread(
+                    target=self._run_bg_task,
+                    args=(self._task_instruction, text, selected_text),
+                    daemon=True,
+                ).start()
+                self._rec_window.show_thinking()
+            else:
+                threading.Thread(
+                    target=self._run_bg_task,
+                    args=(self._task_normal, text, field_context, app_name),
+                    daemon=True,
+                ).start()
                 self._rec_window.show_thinking()
 
-                print("[助手模式] 调用 handle_voice_command...", flush=True)
-                try:
-                    agent_result = handle_voice_command(text, require_wake_word=False)
-                except Exception as ae:
-                    print(f"[助手模式] 本地 Agent 异常，继续走 DeskClaw: {ae}", flush=True)
-                    agent_result = None
-                print(f"[助手模式] voice_agent 返回: handled={getattr(agent_result, 'handled', None)}, used_tool={getattr(agent_result, 'used_tool', None)}", flush=True)
-
-                if agent_result and agent_result.handled and agent_result.used_tool:
-                    print(f"[助手模式] 本地 Agent 已处理: {agent_result.message[:80]}", flush=True)
-                    _play_success_sound()
-                    notification_info = ("语音助手", agent_result.message[:150])
-                    assistant_entry = {"question": text, "reply": agent_result.message}
-                    result_text = None
-                    self._dispatcher.call_on_main({"refresh_ui": True})
-                    return
-
-                try:
-                    deskclaw_msg = text
-                    if selected_text:
-                        deskclaw_msg = f"[用户选中的文本]\n{selected_text}\n\n[语音指令]\n{text}"
-                        print(f"[助手模式] 附带选中文本({len(selected_text)}字)", flush=True)
-                    print(f"[助手模式] 发送至 DeskClaw: {deskclaw_msg[:80]}", flush=True)
-                    resp = deskclaw_chat(deskclaw_msg)
-                    content = (resp.get("content") or "").strip()
-                    print(f"[助手模式] DeskClaw 回复({len(content)}字): {content[:100]}", flush=True)
-                    assistant_entry = {"question": text, "reply": content or "（无文本回复）"}
-
-                    self._dispatcher.call_on_main({
-                        "show_answer": True,
-                        "answer_text": content or "任务已执行",
-                        "question": text,
-                        "deskclaw_continue": True,
-                    })
-                    _play_success_sound()
-                    result_text = None
-                    return
-                except DeskClawUnavailable:
-                    notification_info = ("DeskClaw 未连接", "请先启动 DeskClaw 应用")
-                    return
-                except Exception as e:
-                    print(f"[助手模式] DeskClaw 异常: {e}")
-                    notification_info = ("DeskClaw 异常", str(e)[:80])
-                    return
-            elif selected_text:
-                print(f"[等待结果] 指令模式: 选中={selected_text[:30]}, 指令={text[:30]}")
-                try:
-                    from concurrent.futures import ThreadPoolExecutor
-                    self._rec_window.show_thinking()
-
-                    with ThreadPoolExecutor(max_workers=2) as pool:
-                        classify_future = pool.submit(classify_intent, selected_text, text)
-                        rewrite_future = pool.submit(process_with_instruction, selected_text, text)
-
-                        try:
-                            intent = classify_future.result(timeout=6.0)
-                        except Exception as ce:
-                            print(f"[意图分类] 并行调用异常，fallback rewrite: {ce}")
-                            intent = "rewrite"
-
-                        if intent == "question":
-                            rewrite_future.cancel()
-                            print("[等待结果] 意图=提问，启动 answer_question")
-                            answer = answer_question(selected_text, text)
-                            self._dispatcher.call_on_main({
-                                "show_answer": True,
-                                "answer_text": answer,
-                                "question": text,
-                            })
-                            result_text = None
-                            return
-                        else:
-                            print("[等待结果] 意图=改写，等待改写结果")
-                            rewrite_result = rewrite_future.result(timeout=20.0)
-                            if rewrite_result is not None:
-                                text = rewrite_result
-                            else:
-                                print("[指令处理] LLM 未返回结果")
-                                notification_info = ("指令处理失败", "大模型未返回结果，请检查模型配置")
-                                return
-                except Exception as e:
-                    print(f"[指令处理] 异常: {e}")
-                    notification_info = ("指令处理失败", _friendly_llm_error(e))
-                    return
-            else:
-                print("[等待结果] 开始技能处理...")
-                try:
-                    self._rec_window.show_thinking()
-                    processed: ProcessResult = _apply_skills(text)
-                    text = processed.text
-                    if processed.handled_by_agent:
-                        notification_info = ("语音 Agent", text[:100])
-                        result_text = None
-                        return
-                except Exception as e:
-                    print(f"[技能处理] 异常，使用原始文本: {e}")
-
-            print(f"[等待结果] 处理完成: {repr(text[:80])}")
-            result_text = text
-
         except Exception as e:
-            print(f"[等待结果] 异常: {e}")
+            print(f"[等待结果] 异常: {e}", flush=True)
             notification_info = ("识别异常", _friendly_asr_error(str(e)))
         finally:
-            print(f"[等待结果] finally: text={repr(result_text)}, notif={notification_info}")
+            print(f"[等待结果] 释放录音锁, notif={notification_info}", flush=True)
             self._asr_session = None
             self._record_mode = None
-            self._busy = False
+            self._recording_busy = False
             self._dispatcher.call_on_main(
-                {"text": result_text, "notif": notification_info,
-                 "assistant_entry": assistant_entry}
+                {"asr_done": True, "notif": notification_info}
             )
 
+    def _run_bg_task(self, fn, *args):
+        """在后台线程中执行非 TaskManager 任务并投递结果。"""
+        try:
+            result = fn(*args)
+        except Exception as e:
+            print(f"[后台任务] 异常: {e}", flush=True)
+            result = {"notif": ("处理失败", str(e)[:80])}
+        if result is None:
+            if not self._recording_busy:
+                self._rec_window.hide()
+            return
+        if self._recording_busy:
+            with self._pending_lock:
+                self._pending_results.append(result)
+            print("[后台任务] 结果已缓存（正在录音中）", flush=True)
+        else:
+            self._rec_window.hide()
+            self._task_dispatcher.call_on_main({"deliver_result": result})
+
+    # ── 后台任务函数（在 TaskManager 线程池中执行） ──
+
+    def _task_assistant(self, text: str, selected_text: str | None) -> dict:
+        """助手模式任务：voice_agent + DeskClaw。"""
+        print("[任务-助手] 调用 handle_voice_command...", flush=True)
+        try:
+            agent_result = handle_voice_command(text, require_wake_word=False)
+        except Exception as ae:
+            print(f"[任务-助手] 本地 Agent 异常，继续走 DeskClaw: {ae}", flush=True)
+            agent_result = None
+        print(f"[任务-助手] voice_agent 返回: handled={getattr(agent_result, 'handled', None)}, used_tool={getattr(agent_result, 'used_tool', None)}", flush=True)
+
+        if agent_result and agent_result.handled and agent_result.used_tool:
+            print(f"[任务-助手] 本地 Agent 已处理: {agent_result.message[:80]}", flush=True)
+            _play_success_sound()
+            self._task_dispatcher.call_on_main({"refresh_ui": True})
+            return {
+                "notif": ("语音助手", agent_result.message[:150]),
+                "assistant_entry": {"question": text, "reply": agent_result.message},
+            }
+
+        try:
+            deskclaw_msg = text
+            if selected_text:
+                deskclaw_msg = f"[用户选中的文本]\n{selected_text}\n\n[语音指令]\n{text}"
+                print(f"[任务-助手] 附带选中文本({len(selected_text)}字)", flush=True)
+            print(f"[任务-助手] 发送至 DeskClaw: {deskclaw_msg[:80]}", flush=True)
+            resp = deskclaw_chat(deskclaw_msg)
+            content = (resp.get("content") or "").strip()
+            print(f"[任务-助手] DeskClaw 回复({len(content)}字): {content[:100]}", flush=True)
+            _play_success_sound()
+            return {
+                "show_answer": True,
+                "answer_text": content or "任务已执行",
+                "question": text,
+                "deskclaw_continue": True,
+                "assistant_entry": {"question": text, "reply": content or "（无文本回复）"},
+            }
+        except DeskClawUnavailable:
+            return {"notif": ("DeskClaw 未连接", "请先启动 DeskClaw 应用")}
+        except Exception as e:
+            print(f"[任务-助手] DeskClaw 异常: {e}")
+            return {"notif": ("DeskClaw 异常", str(e)[:80])}
+
+    def _task_instruction(self, text: str, selected_text: str) -> dict:
+        """指令模式任务：classify + rewrite/answer。"""
+        print(f"[任务-指令] 选中={selected_text[:30]}, 指令={text[:30]}")
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                classify_future = pool.submit(classify_intent, selected_text, text)
+                rewrite_future = pool.submit(process_with_instruction, selected_text, text)
+
+                try:
+                    intent = classify_future.result(timeout=6.0)
+                except Exception as ce:
+                    print(f"[任务-指令] 意图分类异常，fallback rewrite: {ce}")
+                    intent = "rewrite"
+
+                if intent == "question":
+                    rewrite_future.cancel()
+                    print("[任务-指令] 意图=提问，启动 answer_question")
+                    answer = answer_question(selected_text, text)
+                    return {
+                        "show_answer": True,
+                        "answer_text": answer,
+                        "question": text,
+                    }
+                else:
+                    print("[任务-指令] 意图=改写，等待改写结果")
+                    rewrite_result = rewrite_future.result(timeout=20.0)
+                    if rewrite_result is not None:
+                        return {"text": rewrite_result}
+                    else:
+                        return {"notif": ("指令处理失败", "大模型未返回结果，请检查模型配置")}
+        except Exception as e:
+            print(f"[任务-指令] 异常: {e}")
+            return {"notif": ("指令处理失败", _friendly_llm_error(e))}
+
+    def _task_normal(self, text: str, field_context: str | None, app_name: str | None) -> dict:
+        """普通模式任务：skill_engine 处理。"""
+        print("[任务-普通] 开始技能处理...", flush=True)
+        try:
+            processed: ProcessResult = _apply_skills(text, field_context=field_context, app_name=app_name)
+            text = processed.text
+            if processed.handled_by_agent:
+                return {"notif": ("语音 Agent", text[:100])}
+        except Exception as e:
+            print(f"[任务-普通] 技能处理异常，使用原始文本: {e}")
+
+        print(f"[任务-普通] 处理完成: {repr(text[:80])}")
+        return {"text": text}
+
     def _mainThreadCleanup(self, info):
-        """在主线程执行所有 UI 清理操作。"""
+        """在主线程执行 ASR 阶段结束后的 UI 清理。"""
         if info and info.get("refresh_ui"):
             self._push_all_settings()
             return
@@ -599,52 +695,110 @@ class VoiceInputApp(rumps.App):
             print("[主线程] 录音已取消", flush=True)
             self._asr_session = None
             self._record_mode = None
-            self._busy = False
+            self._recording_busy = False
             self._set_icon(self.ICON_IDLE)
-            self._set_status("就绪")
-            self._update_ui_state("idle")
+            self._update_status_display()
             self._rec_window.hide()
+            self._flush_pending_results()
             return
 
-        if info and info.get("show_answer"):
-            print("[主线程] 显示 AI 回答浮窗")
+        if info and info.get("asr_done"):
+            print("[主线程] ASR 阶段完成，录音锁已释放", flush=True)
             self._set_icon(self.ICON_IDLE)
-            self._set_status("就绪")
-            self._update_ui_state("idle")
-            self._rec_window.hide()
-            self._asr_session = None
-            self._record_mode = None
-            self._busy = False
+            self._update_status_display()
+            notif = info.get("notif")
+            if notif:
+                print(f"[主线程] ASR 阶段通知: {notif}")
+                self._rec_window.show_result(notif[0], notif[1])
+            self._flush_pending_results()
+            return
+
+        self._rec_window.hide()
+        print("[主线程] cleanup 完成")
+
+    # ── 任务管理回调 ──
+
+    def _on_task_status_change(self, status_text: str):
+        """TaskManager 状态变化回调（从后台线程调用）。"""
+        self._task_dispatcher.call_on_main({"update_status": True})
+
+    def _on_task_complete(self, task: Task):
+        """TaskManager 任务完成回调（从后台线程调用）。"""
+        result = task.result if task.status == TaskStatus.COMPLETED else None
+        if result is None and task.status == TaskStatus.FAILED:
+            result = {"notif": ("任务失败", task.error or "未知错误")}
+        if result is None:
+            return
+
+        if self._recording_busy:
+            with self._pending_lock:
+                self._pending_results.append(result)
+            print(f"[任务完成] 任务{task.id} 结果已缓存（正在录音中）", flush=True)
+        else:
+            self._task_dispatcher.call_on_main({"deliver_result": result})
+
+    def _on_task_dispatch(self, info):
+        """在主线程处理任务相关调度。"""
+        if not info:
+            return
+
+        if info.get("refresh_ui"):
+            self._push_all_settings()
+            return
+
+        if info.get("update_status"):
+            self._update_status_display()
+            return
+
+        result = info.get("deliver_result")
+        if result:
+            self._deliver_task_result(result)
+
+    def _deliver_task_result(self, result: dict):
+        """在主线程投递单个任务结果。"""
+        if result.get("show_answer"):
+            print("[任务投递] 显示 AI 回答浮窗")
+            assistant_entry = result.get("assistant_entry")
+            if assistant_entry:
+                try:
+                    self._add_history(
+                        assistant_entry["question"], reply=assistant_entry["reply"]
+                    )
+                except Exception as e:
+                    print(f"[任务投递] 保存助手历史失败: {e}", flush=True)
             self._show_answer_window(
-                info["answer_text"],
-                info.get("question", ""),
-                deskclaw_continue=bool(info.get("deskclaw_continue")),
+                result["answer_text"],
+                result.get("question", ""),
+                deskclaw_continue=bool(result.get("deskclaw_continue")),
             )
+            self._update_status_display()
             return
 
-        assistant_entry = info.get("assistant_entry") if info else None
+        text = result.get("text")
+        notif = result.get("notif")
+        assistant_entry = result.get("assistant_entry")
+
         if assistant_entry:
-            self._add_history(
-                assistant_entry["question"], reply=assistant_entry["reply"]
-            )
-
-        print("[主线程] cleanup 开始")
-        self._set_icon(self.ICON_IDLE)
-        self._set_status("就绪")
-        self._update_ui_state("idle")
-
-        text = info.get("text") if info else None
-        notif = info.get("notif") if info else None
+            try:
+                self._add_history(
+                    assistant_entry["question"], reply=assistant_entry["reply"]
+                )
+            except Exception as e:
+                print(f"[任务投递] 保存助手历史失败: {e}", flush=True)
 
         if text:
-            self._rec_window.hide()
-            print(f"[主线程] 准备粘贴: {text[:50]}")
-            self._add_history(text)
+            print(f"[任务投递] 准备粘贴: {text[:50]}")
+            try:
+                self._add_history(text)
+            except Exception as e:
+                print(f"[任务投递] 保存历史失败: {e}", flush=True)
             s = get_settings()
             if s.auto_paste:
                 ok = paste_text(text)
-                print(f"[主线程] 粘贴结果: {ok}")
-                if not ok:
+                print(f"[任务投递] 粘贴结果: {ok}")
+                if ok:
+                    _start_dict_learning(text)
+                else:
                     alert = NSAlert.alloc().init()
                     alert.setMessageText_("已复制到剪贴板")
                     alert.setInformativeText_(
@@ -654,11 +808,33 @@ class VoiceInputApp(rumps.App):
                     alert.addButtonWithTitle_("好")
                     alert.runModal()
         elif notif:
-            print(f"[主线程] 通知: {notif}")
+            print(f"[任务投递] 通知: {notif}")
             self._rec_window.show_result(notif[0], notif[1])
+
+        self._update_status_display()
+
+    def _flush_pending_results(self):
+        """投递录音期间缓存的任务结果。"""
+        with self._pending_lock:
+            pending = list(self._pending_results)
+            self._pending_results.clear()
+        for result in pending:
+            print("[主线程] 投递缓存的任务结果", flush=True)
+            self._deliver_task_result(result)
+
+    def _update_status_display(self):
+        """根据当前状态优先级更新菜单栏和 Web UI 的状态显示。"""
+        if self._recording_busy:
+            return
+
+        if self._task_manager.has_running_tasks():
+            status_text = self._task_manager.get_status_text()
+            self._set_status(status_text)
+            ui_state = self._task_manager.get_status_for_ui()
+            self._update_ui_state_full(ui_state)
         else:
-            self._rec_window.hide()
-        print("[主线程] cleanup 完成")
+            self._set_status("就绪")
+            self._update_ui_state("idle")
 
     # ── AI 回答浮窗 ──
 
@@ -669,9 +845,9 @@ class VoiceInputApp(rumps.App):
         *,
         deskclaw_continue: bool = False,
     ):
-        """在主线程创建并显示 AI 回答浮窗。"""
-        from answer_window import get_answer_window
-        win = get_answer_window()
+        """在主线程创建并显示 AI 回答浮窗（每次新建窗口）。"""
+        from answer_window import create_answer_window
+        win = create_answer_window()
         win.show_answer(question, answer_text, deskclaw_continue=deskclaw_continue)
 
     # ── 识别历史 ──
@@ -796,7 +972,7 @@ class VoiceInputApp(rumps.App):
         s = get_settings()
         v = s.volcengine
 
-        providers = dict(s.providers)
+        providers = {pid: dict(cfg) for pid, cfg in s.providers.items()}
         if "volcengine" not in providers and s.is_volcengine_ready():
             providers["volcengine"] = {
                 "auth_method": v.auth_method,
@@ -840,6 +1016,7 @@ class VoiceInputApp(rumps.App):
                 "personalize_text": s.skills.personalize_text,
                 "user_dict": s.skills.user_dict,
                 "user_dict_text": s.skills.user_dict_text,
+                "auto_learn_dict": s.skills.auto_learn_dict,
                 "auto_structure": s.skills.auto_structure,
                 "oral_filter": s.skills.oral_filter,
                 "remove_trailing_punct": s.skills.remove_trailing_punct,
@@ -865,6 +1042,11 @@ class VoiceInputApp(rumps.App):
         if self._app_window is None or not self._app_window._page_loaded:
             return
         self._app_window.call_js_safe("updateState", {"status": status})
+
+    def _update_ui_state_full(self, state: dict):
+        if self._app_window is None or not self._app_window._page_loaded:
+            return
+        self._app_window.call_js_safe("updateState", state)
 
     def _notify_hotkey_event(self, is_down: bool):
         if self._app_window is None or not self._app_window._page_loaded:
@@ -998,6 +1180,21 @@ class VoiceInputApp(rumps.App):
                 return os.sep + os.path.join(*parts[1:i + 1])
         return None
 
+    # ── 词典自动学习回调 ──
+
+    def _on_dict_learned(self, info):
+        """词典自动学习完成后在主线程刷新 UI。"""
+        words = info.get("words", []) if info else []
+        if not words:
+            return
+        print(f"[主线程] 词典自动学习: {'、'.join(words)}", flush=True)
+        self._push_all_settings()
+        rumps.notification(
+            title="随口说",
+            subtitle="词典自动学习",
+            message=f"已学习: {'、'.join(words)}",
+        )
+
     # ── Bridge: 技能设置 ──
 
     def _bridge_save_skills(self, args: dict):
@@ -1008,6 +1205,7 @@ class VoiceInputApp(rumps.App):
         sk.personalize_text = args.get("personalize_text", sk.personalize_text)
         sk.user_dict = args.get("user_dict", sk.user_dict)
         sk.user_dict_text = args.get("user_dict_text", sk.user_dict_text)
+        sk.auto_learn_dict = args.get("auto_learn_dict", sk.auto_learn_dict)
         sk.auto_structure = args.get("auto_structure", sk.auto_structure)
         sk.oral_filter = args.get("oral_filter", sk.oral_filter)
         sk.remove_trailing_punct = args.get("remove_trailing_punct", sk.remove_trailing_punct)
@@ -1099,6 +1297,7 @@ class VoiceInputApp(rumps.App):
         self._escape_monitor.stop()
         if self._recorder.is_recording:
             self._recorder.stop()
+        self._task_manager.shutdown()
         self._rec_window.hide()
         if self._app_window:
             self._app_window.hide()

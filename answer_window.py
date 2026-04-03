@@ -510,6 +510,7 @@ class AnswerWindowController(NSObject):
         self._panel.setMinSize_((340, 280))
         self._panel.setBecomesKeyOnlyIfNeeded_(False)
         self._panel.setHidesOnDeactivate_(False)
+        self._panel.setCollectionBehavior_(1 << 0 | 1 << 8)
 
         content = self._panel.contentView()
         content.setWantsLayer_(True)
@@ -794,13 +795,15 @@ class AnswerWindowController(NSObject):
     def _doDismiss_(self, _):
         self._remove_monitors()
         self._panel.orderOut_(None)
+        if self in _active_windows:
+            _active_windows.remove(self)
 
 
-_instance: AnswerWindowController | None = None
+_active_windows: list[AnswerWindowController] = []
 
 
-def get_answer_window() -> AnswerWindowController:
-    global _instance
-    if _instance is None:
-        _instance = AnswerWindowController.alloc().init()
-    return _instance
+def create_answer_window() -> AnswerWindowController:
+    """每次调用创建一个新的回答浮窗实例。"""
+    win = AnswerWindowController.alloc().init()
+    _active_windows.append(win)
+    return win

@@ -12,6 +12,7 @@ import objc
 from AppKit import (
     NSBezelStyleRounded,
     NSButton,
+    NSEvent,
     NSWindow,
     NSView,
     NSTextField,
@@ -300,6 +301,7 @@ class RecordingWindowController(NSObject):
         )
         self.window.setHasShadow_(True)
         self.window.setMovableByWindowBackground_(True)
+        self.window.setCollectionBehavior_(1 << 0 | 1 << 8)
 
         content = self.window.contentView()
         content.setWantsLayer_(True)
@@ -368,6 +370,16 @@ class RecordingWindowController(NSObject):
         if self._cancel_handler:
             self._cancel_handler()
 
+    def _current_screen(self):
+        """根据鼠标位置返回当前所在屏幕。"""
+        mouse_loc = NSEvent.mouseLocation()
+        for screen in NSScreen.screens():
+            frame = screen.frame()
+            if (frame.origin.x <= mouse_loc.x <= frame.origin.x + frame.size.width and
+                    frame.origin.y <= mouse_loc.y <= frame.origin.y + frame.size.height):
+                return screen
+        return NSScreen.mainScreen()
+
     def show(self):
         self._cancel_result_timer()
         self._text_label.setStringValue_("")
@@ -387,6 +399,11 @@ class RecordingWindowController(NSObject):
             self._timer.invalidate()
             self._timer = None
 
+        screen = self._current_screen()
+        vf = screen.visibleFrame()
+        x = vf.origin.x + (vf.size.width - _WIN_W) / 2
+        y = vf.origin.y + vf.size.height - _WIN_H - 10
+        self.window.setFrameOrigin_((x, y))
         self.window.orderFrontRegardless()
 
         self._timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(

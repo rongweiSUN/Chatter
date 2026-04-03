@@ -6,9 +6,18 @@
 from __future__ import annotations
 
 import json
+import ssl
 import urllib.request
 import urllib.error
 from typing import Optional
+
+try:
+    import certifi
+    ssl._create_default_https_context = lambda: ssl.create_default_context(
+        cafile=certifi.where()
+    )
+except ImportError:
+    pass
 
 
 _DEFAULT_URLS = {

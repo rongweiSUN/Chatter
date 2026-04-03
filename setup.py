@@ -41,10 +41,12 @@ OPTIONS = {
         "websockets",
         "dotenv",
         "objc",
+        "certifi",
         "AppKit",
         "Foundation",
         "Quartz",
         "WebKit",
+        "ApplicationServices",
     ],
     "includes": [
         "config",
@@ -61,6 +63,7 @@ OPTIONS = {
         "confirm_dialog",
         "answer_window",
         "deskclaw_client",
+        "dict_learner",
     ],
 }
 if os.path.exists(os.path.join(os.path.dirname(__file__), "app_icon.icns")):
