@@ -13,7 +13,7 @@ from AppKit import (
     NSBezelStyleRounded,
     NSButton,
     NSEvent,
-    NSWindow,
+    NSPanel,
     NSView,
     NSTextField,
     NSFont,
@@ -288,7 +288,7 @@ class RecordingWindowController(NSObject):
         x = (screen_frame.size.width - _WIN_W) / 2
         y = screen_frame.size.height - _WIN_H - 80
 
-        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        self.window = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(x, y, _WIN_W, _WIN_H),
             NSWindowStyleMaskBorderless,
             NSBackingStoreBuffered,
@@ -301,6 +301,8 @@ class RecordingWindowController(NSObject):
         )
         self.window.setHasShadow_(True)
         self.window.setMovableByWindowBackground_(True)
+        self.window.setFloatingPanel_(True)
+        self.window.setHidesOnDeactivate_(False)
         self.window.setCollectionBehavior_(1 << 0 | 1 << 8)
 
         content = self.window.contentView()

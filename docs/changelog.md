@@ -79,4 +79,12 @@
 - 修复 AI 回答弹窗无法在全屏/最大化应用上显示：`answer_window.py` 的 `_build_panel` 中添加 `setCollectionBehavior_(CanJoinAllSpaces | FullScreenAuxiliary)`
 
 ### 用户反馈
+- 录音浮窗依旧无法在全屏应用上显示
+
+## 2026-04-03 (5)
+
+### 做了什么
+- 修复录音浮窗无法在全屏应用上显示：根据 Apple 文档，`FullScreenAuxiliary` 行为仅对 `NSPanel` 或 `NSPopUpMenuWindowLevel` 以上的 `NSWindow` 生效；将 `recording_window.py` 中的 `NSWindow` 改为 `NSPanel`（`NSWindow` 的子类，专为浮动辅助窗口设计），并设置 `setFloatingPanel_(True)` 和 `setHidesOnDeactivate_(False)` 防止切换应用时浮窗消失
+
+### 用户反馈
 - 无
