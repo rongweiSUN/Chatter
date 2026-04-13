@@ -143,3 +143,15 @@
 
 ### 用户反馈
 - 用户要求同步到 GitHub 并将仓库设为公开
+
+## 2026-04-13 (2)
+
+### 做了什么
+- 清理仓库中泄露的密钥：`default_settings.json` 中的 API Key、火山引擎 Token/AppID 全部置空
+- 将 `default_settings.json` 和 `secrets_backup.txt` 加入 `.gitignore`，从 Git 跟踪中移除 `default_settings.json`
+- 使用 `git filter-repo --replace-text` 重写整个 Git 历史，将三个密钥字符串替换为 `***REMOVED***`
+- 强制推送到 GitHub，确保远程仓库历史中也不再包含任何明文密钥
+- 密钥已备份至本地 `secrets_backup.txt`（不受 Git 跟踪）
+
+### 用户反馈
+- 用户要求清理仓库中的密钥
