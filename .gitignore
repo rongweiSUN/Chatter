@@ -5,8 +5,10 @@ __pycache__/
 venv/
 .venv/
 
-# Environment
+# Environment & Secrets
 .env
+secrets_backup.txt
+default_settings.json
 
 # macOS
 .DS_Store
