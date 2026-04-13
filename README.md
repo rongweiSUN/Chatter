@@ -2,6 +2,12 @@
 
 macOS 菜单栏语音输入工具，支持 LLM 智能后处理与语音 Agent 管理。
 
+## 截图
+
+| AI 回答浮窗 | 技能设置 |
+|:-:|:-:|
+| ![AI 回答浮窗](docs/images/ai-answer-window.png) | ![技能设置](docs/images/skills-settings.png) |
+
 ## 功能
 
 - **双模式快捷键**（默认右 Command，可自定义）
