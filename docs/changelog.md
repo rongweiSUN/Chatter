@@ -134,3 +134,11 @@
 
 ### 用户反馈
 - 无
+
+## 2026-04-13
+
+### 做了什么
+- 将本地已提交的改动经分支 `feature/sync-2026-04-13` 合并入 `main` 并推送到 GitHub `origin`（`rongweiSUN/Chatter`，提交 `a2c9514`）；包含快捷键扩展、`answer_window` 图片展示、`text_input` 剪贴板延迟恢复、`settings`/`setup`/`recording_window` 等变更及 `docs/当随口说X DeskClaw.md`
+
+### 用户反馈
+- 用户要求同步到 GitHub
