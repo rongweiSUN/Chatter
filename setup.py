@@ -64,6 +64,7 @@ OPTIONS = {
         "answer_window",
         "deskclaw_client",
         "dict_learner",
+        "task_manager",
     ],
 }
 if os.path.exists(os.path.join(os.path.dirname(__file__), "app_icon.icns")):

@@ -15,6 +15,7 @@ import objc
 from AppKit import (
     NSAlert,
     NSApp,
+    NSAppearance,
     NSBezelStyleRounded,
     NSBox,
     NSButton,
@@ -172,6 +173,13 @@ body {
 }
 .answer tr:last-child td { border-bottom: none; }
 .answer tr:nth-child(even) td { background: rgba(0,0,0,0.015); }
+.answer img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    margin: 10px 0;
+    display: block;
+}
 .answer a {
     color: #007aff;
     text-decoration: none;
@@ -346,6 +354,11 @@ def _md_to_html(text: str) -> str:
         line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
         line = re.sub(r"\*(.+?)\*", r"<em>\1</em>", line)
         line = re.sub(
+            r"!\[([^\]]*)\]\(([^)]+)\)",
+            r'<img src="\2" alt="\1">',
+            line,
+        )
+        line = re.sub(
             r"\[([^\]]+)\]\(([^)]+)\)",
             r'<a href="\2">\1</a>',
             line,
@@ -503,24 +516,26 @@ class AnswerWindowController(NSObject):
         self._panel.setLevel_(NSFloatingWindowLevel)
         self._panel.setTitle_("AI 回答")
         self._panel.setTitlebarAppearsTransparent_(True)
-        self._panel.setOpaque_(False)
-        self._panel.setBackgroundColor_(NSColor.clearColor())
+        self._panel.setOpaque_(True)
+        self._panel.setBackgroundColor_(
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.96, 0.96, 0.97, 1.0)
+        )
         self._panel.setHasShadow_(True)
         self._panel.setMovableByWindowBackground_(True)
         self._panel.setMinSize_((340, 280))
         self._panel.setBecomesKeyOnlyIfNeeded_(False)
         self._panel.setHidesOnDeactivate_(False)
         self._panel.setCollectionBehavior_(1 << 0 | 1 << 8)
+        self._panel.setAppearance_(
+            NSAppearance.appearanceNamed_("NSAppearanceNameAqua")
+        )
 
         content = self._panel.contentView()
         content.setWantsLayer_(True)
 
-        effect_view = NSVisualEffectView.alloc().initWithFrame_(content.bounds())
-        effect_view.setAutoresizingMask_(0x02 | 0x10)
-        effect_view.setBlendingMode_(0)  # behindWindow
-        effect_view.setMaterial_(6)  # popover
-        effect_view.setState_(1)  # active
-        content.addSubview_(effect_view)
+        content.layer().setBackgroundColor_(
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.96, 0.96, 0.97, 1.0).CGColor()
+        )
 
         self._link_handler = _LinkHandler.alloc().init()
         wk_config = WKWebViewConfiguration.alloc().init()
@@ -657,7 +672,7 @@ class AnswerWindowController(NSObject):
         ).replace(
             "__ANSWER_HTML__", answer_html
         )
-        self._webview.loadHTMLString_baseURL_(full_html, None)
+        self._webview.loadHTMLString_baseURL_(full_html, NSURL.fileURLWithPath_("/"))
 
         mouse_loc = NSEvent.mouseLocation()
         screen = NSScreen.mainScreen()

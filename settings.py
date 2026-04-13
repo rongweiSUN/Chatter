@@ -49,15 +49,15 @@ class ASRProviderConfig:
 
 @dataclass
 class SkillsConfig:
-    auto_run: bool = False
+    auto_run: bool = True
     personalize: bool = False
     personalize_text: str = ""
     user_dict: bool = False
     user_dict_text: str = ""
     auto_learn_dict: bool = False
     auto_structure: bool = False
-    oral_filter: bool = False
-    remove_trailing_punct: bool = False
+    oral_filter: bool = True
+    remove_trailing_punct: bool = True
     custom_skills: list = field(default_factory=list)
 
 

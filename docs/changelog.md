@@ -87,4 +87,50 @@
 - 修复录音浮窗无法在全屏应用上显示：根据 Apple 文档，`FullScreenAuxiliary` 行为仅对 `NSPanel` 或 `NSPopUpMenuWindowLevel` 以上的 `NSWindow` 生效；将 `recording_window.py` 中的 `NSWindow` 改为 `NSPanel`（`NSWindow` 的子类，专为浮动辅助窗口设计），并设置 `setFloatingPanel_(True)` 和 `setHidesOnDeactivate_(False)` 防止切换应用时浮窗消失
 
 ### 用户反馈
+- 修改快捷键时应用卡死
+
+## 2026-04-03 (6)
+
+### 做了什么
+- 修复修改快捷键时应用卡死：`hotkey.py` 中 `HotkeyRecorder._handle` 原来在事件监听回调内部直接调用 `self.stop()`（即 `NSEvent.removeMonitor_`），在 macOS 的本地事件监听器回调中移除自身会导致 run loop 死锁；新增 `_DeferredCall`（`NSObject` 子类），通过 `performSelectorOnMainThread:waitUntilDone:NO` 将 `stop()` 和回调推迟到下一个 run loop 迭代执行，同时增加 `_done` 标志防止重复触发
+
+### 用户反馈
+- 无
+
+## 2026-04-03 (7)
+
+### 做了什么
+- 快捷键支持符号/标点键：`hotkey.py` 全面扩展，从仅支持修饰键扩展到同时支持普通按键（如 ` / ; ' [ ] \ 等）
+- `HotkeyMonitor`：`start()` 根据 keycode 类型自动选择事件掩码——修饰键用 `NSEventMaskFlagsChanged`，普通键用 `NSEventMaskKeyDown | NSEventMaskKeyUp`；`_handle_event` 分两路径处理按下/松开逻辑；`_handle_local` 对普通键返回 `None` 吞掉事件防止产生字符输入
+- `HotkeyRecorder`：`start()` 同时监听 `NSEventMaskFlagsChanged | NSEventMaskKeyDown` 捕获所有类型按键；`_handle` 根据事件类型分别处理修饰键和普通键录制，排除 ESC/Return/Tab/Space/Delete/方向键等不适合作为快捷键的按键；用 `event.charactersIgnoringModifiers()` 获取普通键的显示名
+- 新增 `_EXCLUDED_KEYCODES` 集合和事件类型常量
+
+### 用户反馈
+- 无
+
+## 2026-04-03 (8)
+
+### 做了什么
+- AI 回答窗口支持图片展示：`answer_window.py` 的 `_inline` 函数新增 markdown 图片语法 `![alt](src)` 解析，在链接正则之前匹配，转为 `<img>` 标签
+- `_HTML_TEMPLATE` CSS 新增 `.answer img` 样式（`max-width: 100%`、圆角、居中），图片自适应窗口宽度
+- `loadHTMLString_baseURL_` 的 `baseURL` 从 `None` 改为 `NSURL.fileURLWithPath_("/")`，使 WKWebView 能加载本地文件路径的图片
+
+### 用户反馈
+- 无
+
+## 2026-04-03 (9)
+
+### 做了什么
+- 修复在 AI 回答窗口中使用语音输入时粘贴为旧剪贴板内容的问题：`text_input.py` 的 `paste_text` 函数中，剪贴板恢复从同步立即执行改为 `threading.Timer(0.5s)` 异步延迟执行，确保 Cmd+V 事件被本应用的 NSTextField 完全处理后再恢复旧剪贴板
+- 新用户安装默认开启技能润色：`settings.py` 的 `SkillsConfig.auto_run` 默认值从 `False` 改为 `True`
+
+### 用户反馈
+- 无
+
+## 2026-04-03 (10)
+
+### 做了什么
+- 新建 `docs/当随口说X DeskClaw.md` 项目介绍文档，包含功能介绍、使用方法、架构图、常见问题等内容
+
+### 用户反馈
 - 无

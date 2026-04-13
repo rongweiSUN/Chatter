@@ -12,6 +12,7 @@ import ctypes.util
 import platform
 import subprocess
 import sys
+import threading
 import time
 
 from AppKit import NSPasteboard, NSPasteboardTypeString
@@ -369,11 +370,13 @@ def paste_text(text: str) -> bool:
         # Pump the run loop instead of blocking with time.sleep so that
         # the Cmd+V event can be delivered when the focused window belongs
         # to our own process (the main thread must be unblocked for macOS
-        # to dispatch the keyboard event to our WKWebView).
+        # to dispatch the keyboard event to our WKWebView / NSTextField).
         NSRunLoop.currentRunLoop().runUntilDate_(
             NSDate.dateWithTimeIntervalSinceNow_(0.3)
         )
         if old_clipboard is not None:
-            _set_clipboard(old_clipboard)
+            def _restore():
+                _set_clipboard(old_clipboard)
+            threading.Timer(0.5, _restore).start()
 
     return ok

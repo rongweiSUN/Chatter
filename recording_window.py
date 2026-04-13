@@ -288,13 +288,14 @@ class RecordingWindowController(NSObject):
         x = (screen_frame.size.width - _WIN_W) / 2
         y = screen_frame.size.height - _WIN_H - 80
 
+        _NSNonactivatingPanel = 1 << 7
         self.window = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(x, y, _WIN_W, _WIN_H),
-            NSWindowStyleMaskBorderless,
+            NSWindowStyleMaskBorderless | _NSNonactivatingPanel,
             NSBackingStoreBuffered,
             False,
         )
-        self.window.setLevel_(NSFloatingWindowLevel)
+        self.window.setLevel_(25)  # NSStatusWindowLevel
         self.window.setOpaque_(False)
         self.window.setBackgroundColor_(
             NSColor.colorWithCalibratedRed_green_blue_alpha_(0.1, 0.1, 0.1, 0.85)
