@@ -155,3 +155,12 @@
 
 ### 用户反馈
 - 用户要求清理仓库中的密钥
+
+## 2026-04-13 (3)
+
+### 做了什么
+- `README.md` 顶部新增"截图"部分，以表格并排展示两张截图：AI 回答浮窗、技能设置界面
+- 新增 `docs/images/ai-answer-window.png` 和 `docs/images/skills-settings.png` 两张截图文件
+
+### 用户反馈
+- 用户提供飞书 Wiki 链接和两张截图，要求更新到 README
